@@ -1,0 +1,51 @@
+/* Gameplay-specific constraints kept separate from the visual theme. */
+.board {
+  grid-template-columns: repeat(var(--n), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--n), minmax(0, 1fr));
+  touch-action: none;
+}
+
+.cell {
+  min-height: 0;
+  padding: 0;
+  aspect-ratio: 1;
+  overflow: hidden;
+  font: 700 clamp(20px, 4.1vw, 42px) / 1 "Noto Sans TC", sans-serif;
+}
+
+.cell { background: color-mix(in srgb, var(--region) 78%, white); }
+.cell.cat { background: color-mix(in srgb, var(--region) 90%, white); }
+
+.hidden-map {
+  min-height: 420px;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  background: #e5ddcf;
+  color: var(--muted);
+}
+
+.hidden-map span { color: var(--orange); font-size: 58px; }
+.hidden-map h2 { margin: 8px 0 0; font: 700 32px Fredoka, sans-serif; color: var(--ink); }
+.hidden-map p { max-width: 300px; line-height: 1.65; }
+
+.finish-notice {
+  position: fixed;
+  z-index: 20;
+  right: 24px;
+  bottom: 24px;
+  width: min(360px, calc(100% - 32px));
+  padding: 26px;
+  background: var(--paper);
+  box-shadow: 0 16px 44px rgba(32, 34, 42, .27);
+  animation: pop-in .26s ease-out;
+}
+
+.finish-notice .finish-cat { font-size: 36px; }
+.finish-notice h2 { margin: 6px 0; font: 700 32px Fredoka, sans-serif; }
+.finish-notice > p:not(.eyebrow) { margin: 0; color: var(--muted); font-size: 14px; }
+.finish-notice ol { list-style: none; margin: 18px 0; padding: 0; }
+.finish-notice li { display: grid; grid-template-columns: 36px 1fr auto; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.finish-notice li b { color: var(--orange); }
+.finish-notice li small { color: var(--muted); }
+@keyframes pop-in { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
