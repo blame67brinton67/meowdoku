@@ -94,6 +94,9 @@
 .watch-hint { margin: 12px 0 0; color: var(--teal); font-size: 12px; line-height: 1.5; }
 .role-toggle { width: 100%; margin-top: 12px; padding: 11px; border: 1px dashed rgba(28, 106, 99, .45); border-radius: 999px; background: rgba(255, 255, 255, .5); color: var(--teal); font-weight: 700; transition: background .18s, border-color .18s; }
 .role-toggle:hover { background: #fff; border-color: var(--teal); }
+.sprint-setting { display: grid; gap: 6px; width: 100%; margin-top: 12px; color: var(--muted); font-size: 12px; }
+.sprint-setting select { width: 100%; padding: 9px 11px; border: 1px solid rgba(28, 106, 99, .28); border-radius: 999px; background: rgba(255, 255, 255, .5); color: var(--ink); }
+.sprint-setting.readonly { display: block; }
 .public-rooms { padding-bottom: 60px; }
 .public-room-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
 .public-room { display: grid; grid-template-columns: 38px 1fr auto; align-items: center; gap: 11px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(255,255,255,.6); text-align: left; color: var(--ink); transition: transform .18s, box-shadow .18s, border-color .18s; }
