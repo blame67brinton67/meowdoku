@@ -221,7 +221,7 @@ async function chooseCell(cell) {
     return;
   }
   const correct = state.single.solution.some(cat => cat.row === row && cat.col === col);
-  if (!correct) { playSfx('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
+  if (!correct) { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
   state.cats.add(key); state.marks.delete(key);
   if (state.cats.size === state.single.size) {
     await api('/api/single-complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ visitorId: state.visitorId, name: playerName(), levelId: state.single.id }) });
@@ -232,7 +232,7 @@ async function chooseCell(cell) {
   } else {
       renderGame('答對了！');
   }
-  playSfx('meow'); playCatReveal(row, col);
+  window.playSfx?.('meow'); playCatReveal(row, col);
 }
 
 async function showMultiplayer() {
@@ -283,8 +283,8 @@ socket.on('room-state', room => {
   }
   renderGame(); state.deathFlashRendered = true;
 });
-socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); renderGame('答對了！'); playSfx('meow'); playCatReveal(row, col); } else { playSfx('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
-socket.on('match-started', () => { playSfx('go'); state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
+socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); renderGame('答對了！'); window.playSfx?.('meow'); playCatReveal(row, col); } else { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
+socket.on('match-started', () => { window.playSfx?.('go'); state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
 socket.on('player-eliminated', ({ playerId }) => { state.deathFlashId = playerId; state.deathFlashRendered = false; });
 socket.on('disconnect', () => {
   if (state.mode !== 'multi' || !state.room) return;
@@ -303,10 +303,10 @@ socket.on('room-closed', ({ reason }) => exitRoom(reason));
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && !socket.connected) socket.connect();
 });
-socket.on('final-sprint', ({ deadline, sprintSeconds }) => { playSfx('sprint'); state.room.deadline = deadline; if (sprintSeconds) state.room.sprintSeconds = sprintSeconds; renderGame(`第一位完成！${sprintSeconds || state.room.sprintSeconds} 秒最後衝刺開始。`); });
+socket.on('final-sprint', ({ deadline, sprintSeconds }) => { window.playSfx?.('sprint'); state.room.deadline = deadline; if (sprintSeconds) state.room.sprintSeconds = sprintSeconds; renderGame(`第一位完成！${sprintSeconds || state.room.sprintSeconds} 秒最後衝刺開始。`); });
 socket.on('game-finished', ({ results }) => { window.lastResults = results; renderGame('本局結束！'); showFinishNotice(results); });
-setInterval(() => document.querySelectorAll('[data-deadline]').forEach(node => { node.textContent = remainingSeconds(node.dataset.deadline); }), 250);
-setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { const t = Math.max(0, Math.ceil((Number(node.dataset.countdown) - Date.now()) / 1000)); if (!node.dataset.ticked || String(t) !== node.textContent) { node.dataset.ticked = '1'; node.textContent = t; if (t > 0) playSfx('tick'); } }), 100);
+setInterval(() => document.querySelectorAll('[data-deadline]').forEach(node => { const t = remainingSeconds(node.dataset.deadline); const changed = node.dataset.tickAt !== String(t); node.textContent = t; if (changed && t > 0 && t <= 5) window.playSfx?.('tick'); node.dataset.tickAt = t; }), 250);
+setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { const t = Math.max(0, Math.ceil((Number(node.dataset.countdown) - Date.now()) / 1000)); if (!node.dataset.ticked || String(t) !== node.textContent) { node.dataset.ticked = '1'; node.textContent = t; if (t > 0) window.playSfx?.('tick'); } }), 100);
 
 function playCatReveal(row, col) {
   requestAnimationFrame(() => {
