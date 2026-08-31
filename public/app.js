@@ -5,7 +5,7 @@ const state = {
   visitorId: localStorage.visitorId || crypto.randomUUID(),
   name: localStorage.meowdokuName || '',
   mode: 'home', single: null, room: null, marks: new Set(), cats: new Set(), pending: new Set(), dragged: false, dragMarking: false,
-  touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false
+  touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: ''
 };
 localStorage.visitorId = state.visitorId;
 const anonymousTag = localStorage.meowdokuAnonTag || String(Math.floor(Math.random() * 9000) + 1000);
@@ -95,9 +95,9 @@ function renderGame(message = '') {
     : `<p class="hint">${room.status === 'countdown' ? '準備好了嗎？所有玩家會同時開局。' : waitingForRoom ? '房主按下開始前，地圖會保持保密。' : isViewing ? '點選右側玩家名稱，即可查看他的即時棋盤與標記。' : '左鍵確認貓咪，點錯就淘汰；右鍵僅作個人筆記。'}</p>`;
   const boardArea = waitingForRoom
     ? `<div class="hidden-map"><span>${room.status === 'countdown' ? '<b data-countdown="' + room.countdownEnds + '">3</b>' : '♟'}</span><h2>${room.status === 'countdown' ? '即將開始！' : '地圖已封印'}</h2><p>${room.status === 'countdown' ? '倒數結束後，題目會同時揭曉。' : '房主開始遊戲後，所有人會同時看到題目。'}</p></div>`
-    : `<div class="board-wrap">${renderBoard(puzzle, Boolean(isViewing || (state.mode === 'multi' && room.status !== 'playing')), viewedBoard(me, isViewing))}</div>`;
+    : `<div class="board-wrap">${renderBoard(puzzle, Boolean(isViewing || state.connectionLost || (state.mode === 'multi' && room.status !== 'playing')), viewedBoard(me, isViewing))}</div>`;
   const nextAction = state.mode === 'single' && state.singleCompleted ? `<div class="next-action">${state.nextSingleId ? '<button class="primary" id="next-level">前往下一關 →</button>' : '<button class="primary" id="next-level">回到關卡列表</button>'}</div>` : '';
-  const layout = [state.mode, room?.code || '', puzzle.id || '', puzzle.size, room?.status || '', waitingForRoom, Boolean(isViewing), state.singleCompleted, state.nextSingleId].join('|');
+  const layout = [state.mode, room?.code || '', puzzle.id || '', puzzle.size, room?.status || '', waitingForRoom, Boolean(isViewing), state.singleCompleted, state.nextSingleId, state.connectionLost].join('|');
   if (layout === renderedLayout && document.querySelector('.game-layout')) {
     patchGame(puzzle, room, me, isViewing, message);
     return;
@@ -139,7 +139,7 @@ function renderBoard(puzzle, locked, boardState = { cats: state.cats, marks: sta
   }).join('')}</div>`;
 }
 function gameStatus(room, me) {
-  const status = room.status === 'lobby' ? '等待房主開始' : room.status === 'countdown' ? '3 秒倒數中' : room.status === 'finished' ? '本局已結束' : me?.completedAt ? '你已完成，現在可以觀戰' : me?.alive === false ? '你已被淘汰，改為觀戰' : `找到 ${state.cats.size} / ${room.puzzle.size} 隻貓咪`;
+  const status = state.connectionLost ? '連線中斷，正在重新連線…' : state.idleNotice && me?.spectator ? state.idleNotice : room.status === 'lobby' ? '等待房主開始' : room.status === 'countdown' ? '3 秒倒數中' : room.status === 'finished' ? '本局已結束' : me?.completedAt ? '你已完成，現在可以觀戰' : me?.alive === false ? '你已被淘汰，改為觀戰' : `找到 ${state.cats.size} / ${room.puzzle.size} 隻貓咪`;
   return `<span>${status}</span>${room.deadline ? `<span class="sprint">最後衝刺 <b data-deadline="${room.deadline}">${remainingSeconds(room.deadline)}</b>s</span>` : ''}`;
 }
 function remainingSeconds(deadline) { return Math.max(0, Math.ceil((Number(deadline) - Date.now()) / 1000)); }
@@ -150,7 +150,7 @@ function renderRoomPanel(room, me) {
   const replay = room.status === 'finished' && isHost ? '<button class="primary wide" id="restart-room">用原房號再來一局</button>' : '';
   const roleToggle = room.status === 'lobby'
     ? `<button class="role-toggle" id="role-toggle">${me?.spectator ? '加入本局，成為玩家' : '改為觀戰者'}</button>` : '';
-  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; return `<button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.spectator ? '◉' : player.alive ? '♟' : '×'}</span><strong>${escapeHtml(player.name)}${player.id === state.visitorId ? '（你）' : ''}</strong><small class="player-progress">${status}</small></button>`; }).join('')}</div>${roleToggle}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? '<button class="primary wide" id="start-room">開始這局</button>' : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>${replay}` : ''}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; return `<button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span><strong>${escapeHtml(player.name)}${player.id === state.visitorId ? '（你）' : ''}</strong><small class="player-progress">${status}</small></button>`; }).join('')}</div>${roleToggle}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? '<button class="primary wide" id="start-room">開始這局</button>' : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>${replay}` : ''}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
 }
 function bindBoard() {
   const cells = document.querySelectorAll('.cell');
@@ -257,11 +257,18 @@ function bindRoomButtons() {
   document.querySelector('#restart-room')?.addEventListener('click', () => socket.emit('restart-room', { code: state.room.code, playerId: state.visitorId }, result => result?.error && alert(result.error)));
   document.querySelector('#role-toggle')?.addEventListener('click', () => socket.emit('set-lobby-role', { code: state.room.code, playerId: state.visitorId, spectator: !state.room.players.find(player => player.id === state.visitorId)?.spectator }, result => result?.error && alert(result.error)));
 }
-function leaveRoom() { socket.disconnect(); window.location.reload(); }
+function exitRoom(message) {
+  state.room = null; state.resumeCode = null; state.connectionLost = false; state.watchingPlayerId = null;
+  state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear();
+  home();
+  if (message) alert(message);
+}
+function leaveRoom() { state.resumeCode = null; socket.emit('leave-room', { code: state.room.code, playerId: state.visitorId }); socket.disconnect(); window.location.reload(); }
 
 socket.on('room-state', room => {
   state.room = room; state.mode = 'multi';
   const me = room.players.find(player => player.id === state.visitorId);
+  if (me && !me.spectator) state.idleNotice = '';
   const canWatch = me?.spectator || me?.alive === false || me?.completedAt;
   const targetStillExists = room.players.some(player => player.id === state.watchingPlayerId && !player.spectator);
   if (canWatch && !targetStillExists) {
@@ -275,12 +282,21 @@ socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; 
 socket.on('match-started', () => { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
 socket.on('player-eliminated', ({ playerId }) => { state.deathFlashId = playerId; state.deathFlashRendered = false; });
 socket.on('disconnect', () => {
-  // The server removes a disconnected socket from its room. Clear the local
-  // mirror as well, so a returning tab never shows a stale, non-member room.
   if (state.mode !== 'multi') return;
-  state.room = null; state.watchingPlayerId = null;
-  state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear();
-  home();
+  state.connectionLost = true; state.resumeCode = state.room.code; state.pending.clear(); renderGame();
+});
+socket.on('connect', () => {
+  if (!state.resumeCode || state.mode !== 'multi') return;
+  socket.emit('resume-room', { code: state.resumeCode, playerId: state.visitorId, name: playerName() }, result => {
+    if (result?.error) return exitRoom('房間已關閉，已回到首頁。');
+    state.connectionLost = false; state.resumeCode = null;
+    if (result.movedToSpectator) state.idleNotice = '你離線太久，已改為觀戰。';
+    renderGame();
+  });
+});
+socket.on('room-closed', ({ reason }) => exitRoom(reason));
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && !socket.connected) socket.connect();
 });
 socket.on('final-sprint', ({ deadline }) => { state.room.deadline = deadline; renderGame('第一位完成！60 秒最後衝刺開始。'); });
 socket.on('game-finished', ({ results }) => { window.lastResults = results; renderGame('本局結束！'); showFinishNotice(results); });
