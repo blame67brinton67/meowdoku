@@ -287,13 +287,15 @@ io.on('connection', socket => {
     socket.join(room.code); emitRoom(room); checkAllSpectator(room);
     callback?.({ ok: true, spectator: player.spectator, movedToSpectator: wasIdle && player.spectator });
   });
-  socket.on('leave-room', ({ code, playerId }) => {
+  socket.on('leave-room', ({ code, playerId }, callback) => {
     const room = rooms.get(code); const player = room?.players.get(playerId);
+    callback?.({ ok: true });
     if (!room || !player) return;
     clearTimeout(player.idleTimer); room.players.delete(playerId);
     if (playerId === room.hostId) reassignHost(room);
     if (![...room.players.values()].some(p => p.socketId)) return closeRoom(room, null);
-    if (room.status === 'playing' && allPlayersResolved(room)) finishRoom(room);
+    if (room.status === 'countdown' && !racers(room).length) { clearTimeout(room.countdownTimer); room.status = 'lobby'; room.countdownEnds = null; emitRoom(room); }
+    else if (room.status === 'playing' && (!racers(room).length || allPlayersResolved(room))) finishRoom(room);
     else emitRoom(room);
     checkAllSpectator(room);
   });

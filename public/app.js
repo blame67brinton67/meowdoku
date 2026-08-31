@@ -263,7 +263,13 @@ function exitRoom(message) {
   home();
   if (message) alert(message);
 }
-function leaveRoom() { state.resumeCode = null; socket.emit('leave-room', { code: state.room.code, playerId: state.visitorId }); socket.disconnect(); window.location.reload(); }
+function leaveRoom() {
+  state.resumeCode = null;
+  const quit = () => { socket.disconnect(); window.location.reload(); };
+  // The reload must not outrun the leave packet, but a dead socket never acks.
+  const fallback = setTimeout(quit, 600);
+  socket.emit('leave-room', { code: state.room.code, playerId: state.visitorId }, () => { clearTimeout(fallback); quit(); });
+}
 
 socket.on('room-state', room => {
   state.room = room; state.mode = 'multi';
@@ -282,7 +288,7 @@ socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; 
 socket.on('match-started', () => { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
 socket.on('player-eliminated', ({ playerId }) => { state.deathFlashId = playerId; state.deathFlashRendered = false; });
 socket.on('disconnect', () => {
-  if (state.mode !== 'multi') return;
+  if (state.mode !== 'multi' || !state.room) return;
   state.connectionLost = true; state.resumeCode = state.room.code; state.pending.clear(); renderGame();
 });
 socket.on('connect', () => {
