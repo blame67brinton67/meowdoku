@@ -15,7 +15,7 @@
     <header class="topbar">
       <button id="home-button" class="brand" aria-label="返回首頁"><span>◒</span> MeowDoku</button>
       <div class="player-name"><label for="player-name">玩家</label><input id="player-name" maxlength="20" placeholder="輸入暱稱" /></div>
-      <button id="admin-button" class="quiet-button">管理關卡</button>
+      <button id="admin-button" class="quiet-button">管理關卡</button><button id="mute-button" class="quiet-button" aria-label="音效開關">🔊</button>
     </header>
     <section id="view" aria-live="polite"></section>
   </main>
@@ -30,6 +30,6 @@
       <p id="admin-message" class="message"></p>
     </form>
   </dialog>
-  <script src="/socket.io/socket.io.js"></script><script src="/app.js"></script>
+  <script src="/socket.io/socket.io.js"></script><script src="/sfx.js"></script><script src="/app.js"></script>
 </body>
 </html>
