@@ -221,7 +221,9 @@ io.on('connection', socket => {
     const room = rooms.get(String(code || '').toUpperCase());
     if (!room) return callback({ error: '房間不存在或已關閉' });
     // A match's player roster locks as soon as its countdown begins.
-    joinRoom(socket, room, { name, playerId, spectator: Boolean(spectator) || room.status !== 'lobby' }); callback({ ok: true, spectator: room.status !== 'lobby' || Boolean(spectator) });
+    joinRoom(socket, room, { name, playerId, spectator: Boolean(spectator) || room.status !== 'lobby' });
+    if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
+    callback({ ok: true, spectator: room.status !== 'lobby' || Boolean(spectator) });
   });
   socket.on('start-game', ({ code, playerId }, callback) => {
     const room = rooms.get(code);
@@ -300,6 +302,7 @@ io.on('connection', socket => {
     clearTimeout(player.idleTimer); player.idleTimer = null;
     player.socketId = socket.id; player.disconnectedAt = null; player.idle = false;
     socket.join(room.code); emitRoom(room); checkAllSpectator(room);
+    if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
     callback?.({ ok: true, spectator: player.spectator, movedToSpectator: wasIdle && player.spectator });
   });
   socket.on('leave-room', ({ code, playerId }, callback) => {
