@@ -12,19 +12,9 @@ const anonymousTag = localStorage.meowdokuAnonTag || String(Math.floor(Math.rand
 localStorage.meowdokuAnonTag = anonymousTag;
 nameInput.value = state.name;
 nameInput.addEventListener('input', () => { state.name = nameInput.value.trim(); localStorage.meowdokuName = state.name; });
-// const palette = ['#ff5d4a', '#ffb000', '#34c759', '#218cff', '#9656e8', '#ec3e8a', '#81cf27', '#00a6a6', '#ff7a00', '#d84a73'];
-const palette = [
-    '#D94F4F',
-    '#D99A00',
-    '#3FA45B',
-    '#3478C5',
-    '#7952B3',
-    '#C04F8A',
-    '#6FA832',
-    '#168F8F',
-    '#D66A16',
-    '#B84D68'
-];
+// Deep, hue *and* lightness varied so neighbouring regions stay apart even at
+// 10 × 10; consecutive entries differ most because region ids grow by BFS.
+const palette = ['#c4423d', '#c07c12', '#2c7a4b', '#2b6cb0', '#6b4b9e', '#b83f7d', '#8aa625', '#159490', '#8a4a1f', '#4b5768'];
 const api = async (url, options) => {
   const response = await fetch(url, options); const data = await response.json();
   if (!response.ok) throw new Error(data.error || '發生錯誤'); return data;
