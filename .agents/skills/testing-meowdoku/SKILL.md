@@ -41,6 +41,25 @@ console.log('TESTLOG solution', room.code, JSON.stringify(room.puzzle.solution))
 Revert temp instrumentation and confirm `git status --porcelain` is empty before reporting.
 Keep a pristine copy first (`cp server.js /tmp/server.js.orig`).
 
+## Clicking board cells from screenshots
+With a 800×1180 tiled Chrome window on the left half of a 1600×1200 screen (tool coords 1024×768),
+a 7×7 multiplayer board renders with cell centres at roughly `x = 44 + 36.5·col`,
+`y = 243 + 36.5·row` (tool coordinates). Verify with one click first (a wrong click eliminates
+you); the `找到 N / 7` counter and the `aria-label="第 R 行第 C 列"` cell text confirm the mapping.
+Logging `room.sprintSeconds` next to the solution in the TESTLOG line is handy when testing
+room settings.
+
+## Transient `#game-message` text
+Status messages passed to `renderGame(message)` (e.g. `第一位完成！N 秒最後衝刺開始。`) land in
+`#game-message` and are overwritten within milliseconds by the next `emitRoom`-driven `patchGame`,
+so they are effectively impossible to photograph. To prove the text, register an extra listener in
+the page console before triggering it (app handlers run first, so the DOM already has the message):
+```js
+socket.on('final-sprint', p => console.log(JSON.stringify(p), document.querySelector('#game-message').textContent));
+```
+The persistent `最後衝刺 <b data-deadline>` counter in `.game-status` *is* photographable and is
+the better evidence for countdown-duration assertions.
+
 ## Making fast local behaviour observable
 Optimistic UI states (e.g. `.cell.pending`) resolve in <5 ms on localhost. Temporarily add an
 artificial delay in the socket handler to photograph them:
