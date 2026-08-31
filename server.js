@@ -13,6 +13,7 @@ const ADMIN_KEY = process.env.ADMIN_KEY || 'meowdoku-admin';
 const DATA_DIR = path.join(__dirname, 'data');
 const LEVELS_PATH = path.join(DATA_DIR, 'levels.json');
 const SCORES_PATH = path.join(DATA_DIR, 'scores.json');
+const PUZZLE_POOL_PATH = path.join(DATA_DIR, 'multiplayer-puzzle-pool.json');
 const rooms = new Map();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -61,89 +62,61 @@ function countSolutions(regions, size, stopAt = 2) {
   search(0, -99);
   return solutions;
 }
-function findAlternative(regions, size, expectedColumns) {
-  const usedCols = new Set(), usedRegions = new Set(), selected = [];
-  function search(row, previousCol) {
-    if (row === size) return selected.some((col, index) => col !== expectedColumns[index]) ? [...selected] : null;
-    // Try the intended solution first. It lets us stop at the very first
-    // competing placement rather than enumerating every valid board.
-    const options = [expectedColumns[row], ...Array.from({ length: size }, (_, col) => col).filter(col => col !== expectedColumns[row])];
-    for (const col of options) {
-      const region = regions[row * size + col];
-      if (usedCols.has(col) || usedRegions.has(region) || Math.abs(previousCol - col) <= 1) continue;
-      usedCols.add(col); usedRegions.add(region); selected.push(col);
-      const result = search(row + 1, col);
-      if (result) return result;
-      selected.pop(); usedCols.delete(col); usedRegions.delete(region);
-    }
-    return null;
+function randomNoTouchingColumns(size) {
+  // Build the answer row by row. Every choice is random among columns that
+  // have not appeared before and cannot touch the cat in the previous row.
+  const usedColumns = new Set(), columns = [];
+  for (let row = 0; row < size; row++) {
+    const candidates = Array.from({ length: size }, (_, column) => column)
+      .filter(column => !usedColumns.has(column) && (row === 0 || Math.abs(column - columns[row - 1]) > 1));
+    if (!candidates.length) return null;
+    const column = candidates[Math.floor(Math.random() * candidates.length)];
+    usedColumns.add(column); columns.push(column);
   }
-  return search(0, -99);
+  return columns;
 }
-function staysConnectedAfterRemoval(regions, size, cell, region) {
-  const members = regions.flatMap((value, index) => value === region && index !== cell ? [index] : []);
-  if (!members.length) return false;
-  const visited = new Set([members[0]]), queue = [members[0]];
-  while (queue.length) {
-    const current = queue.shift();
-    neighbors(current, size).forEach(next => {
-      if (next !== cell && regions[next] === region && !visited.has(next)) { visited.add(next); queue.push(next); }
+function growRegionsWithMultiSourceBfs(size, cats) {
+  const regions = Array(size * size).fill(-1);
+  const frontiers = cats.map((cell, region) => {
+    regions[cell] = region;
+    return new Set(neighbors(cell, size));
+  });
+  let unassigned = size * size - cats.length;
+  // Each round first chooses a colour, not a cell. That gives every colour
+  // with an open frontier the same chance to grow one step, preventing a
+  // large region from snowballing merely because it owns more frontier cells.
+  while (unassigned) {
+    const expandable = [];
+    frontiers.forEach((frontier, region) => {
+      for (const cell of frontier) if (regions[cell] !== -1) frontier.delete(cell);
+      if (frontier.size) expandable.push(region);
     });
+    if (!expandable.length) throw new Error('色塊擴張意外停止');
+    const region = expandable[Math.floor(Math.random() * expandable.length)];
+    const frontier = frontiers[region];
+    const options = [...frontier];
+    const cell = options[Math.floor(Math.random() * options.length)];
+    frontier.delete(cell);
+    if (regions[cell] !== -1) continue;
+    regions[cell] = region; unassigned--;
+    neighbors(cell, size).forEach(next => { if (regions[next] === -1) frontier.add(next); });
   }
-  return visited.size === members.length;
-}
-function removeAlternatives(regions, size, expectedColumns) {
-  const catCells = new Set(expectedColumns.map((col, row) => row * size + col));
-  for (let step = 0; step < size * size * 4; step++) {
-    const alternative = findAlternative(regions, size, expectedColumns);
-    if (!alternative) return true;
-    const candidates = shuffled(alternative.map((col, row) => row * size + col)
-      .filter((cell, row) => alternative[row] !== expectedColumns[row] && !catCells.has(cell)));
-    let changed = false;
-    for (const cell of candidates) {
-      const from = regions[cell];
-      const options = shuffled(neighbors(cell, size).filter(next => regions[next] !== from));
-      if (!options.length || !staysConnectedAfterRemoval(regions, size, cell, from)) continue;
-      regions[cell] = regions[options[0]];
-      changed = true;
-      break;
-    }
-    if (!changed) return false;
-  }
-  return false;
+  return regions;
 }
 function generatePuzzle(size = 7) {
   size = Math.max(4, Math.min(10, Number(size) || 7));
-  for (let attempt = 0; attempt < 160; attempt++) {
-    // Even columns followed by odd columns keeps consecutive rows at least two
-    // columns apart, satisfying the no-touching rule before regions are grown.
-    const split = Math.ceil(size / 2);
-    let permutation = Array.from({ length: size }, (_, row) => row < split ? row * 2 : (row - split) * 2 + 1);
-    if (Math.random() < .5) permutation = permutation.map(col => size - 1 - col);
-    const cats = permutation.map((col, row) => row * size + col);
-    const regions = Array(size * size).fill(-1);
-    cats.forEach((cell, region) => { regions[cell] = region; });
-    const owned = cats.map(cell => [cell]);
-    let remaining = size * size - size;
-    while (remaining) {
-      const choices = [];
-      for (let region = 0; region < size; region++) {
-        const frontier = new Set();
-        owned[region].forEach(cell => neighbors(cell, size).forEach(next => {
-          if (regions[next] === -1) frontier.add(next);
-        }));
-        if (frontier.size) choices.push([region, [...frontier]]);
-      }
-      if (!choices.length) break;
-      const [region, frontier] = choices[Math.floor(Math.random() * choices.length)];
-      const cell = frontier[Math.floor(Math.random() * frontier.length)];
-      regions[cell] = region; owned[region].push(cell); remaining--;
-    }
-    if (remaining === 0 && removeAlternatives(regions, size, permutation) && countSolutions(regions, size) === 1) {
+  // Reject the entire board whenever it has zero or multiple answers. This is
+  // intentionally a pure generate-and-verify loop: no fixed answer pattern
+  // and no post-generation alteration of the regions is used.
+  for (;;) {
+    const permutation = randomNoTouchingColumns(size);
+    if (!permutation) continue;
+    const cats = permutation.map((column, row) => row * size + column);
+    const regions = growRegionsWithMultiSourceBfs(size, cats);
+    if (countSolutions(regions, size) === 1) {
       return { size, regions, solution: cats.map(cell => ({ row: Math.floor(cell / size), col: cell % size })) };
     }
   }
-  throw new Error('關卡生成逾時，請再試一次');
 }
 function loadLevels() {
   const levels = readJson(LEVELS_PATH, []);
@@ -163,7 +136,29 @@ function loadLevels() {
   return [starter];
 }
 let levels = loadLevels();
+let multiplayerPuzzlePool = readJson(PUZZLE_POOL_PATH, []);
+const refillingPoolSizes = new Set();
+const MULTIPLAYER_POOL_PER_SIZE = 4;
 function publicLevel(level) { return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt }; }
+function refillMultiplayerPool(size) {
+  if (refillingPoolSizes.has(size)) return;
+  refillingPoolSizes.add(size);
+  setImmediate(() => {
+    try {
+      const existing = multiplayerPuzzlePool.filter(puzzle => puzzle.size === size).length;
+      for (let count = existing; count < MULTIPLAYER_POOL_PER_SIZE; count++) multiplayerPuzzlePool.push(generatePuzzle(size));
+      writeJson(PUZZLE_POOL_PATH, multiplayerPuzzlePool);
+    } finally { refillingPoolSizes.delete(size); }
+  });
+}
+function takeMultiplayerPuzzle(size) {
+  const normalizedSize = Math.max(4, Math.min(10, Number(size) || 7));
+  const index = multiplayerPuzzlePool.findIndex(puzzle => puzzle.size === normalizedSize);
+  const puzzle = index < 0 ? generatePuzzle(normalizedSize) : multiplayerPuzzlePool.splice(index, 1)[0];
+  if (index >= 0) writeJson(PUZZLE_POOL_PATH, multiplayerPuzzlePool);
+  refillMultiplayerPool(normalizedSize);
+  return puzzle;
+}
 function scoreRows() {
   const scores = readJson(SCORES_PATH, {});
   return Object.values(scores).sort((a, b) => b.cleared.length - a.cleared.length || a.name.localeCompare(b.name, 'zh-Hant'))
@@ -247,7 +242,7 @@ function allPlayersResolved(room) {
 
 io.on('connection', socket => {
   socket.on('create-room', ({ name, playerId, roomName, levelId, size, visibility }, callback) => {
-    const puzzle = levelId ? levels.find(level => level.id === levelId) : generatePuzzle(size || 5);
+    const puzzle = levelId ? levels.find(level => level.id === levelId) : takeMultiplayerPuzzle(size || 7);
     if (!puzzle) return callback({ error: '找不到關卡' });
     const code = nanoid(5).toUpperCase();
     const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId,
@@ -275,7 +270,7 @@ io.on('connection', socket => {
   });
   socket.on('guess', ({ code, playerId, row, col }, callback) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
-    if (!room || !player || room.status !== 'playing' || player.spectator || !player.alive) return;
+    if (!room || !player || room.status !== 'playing' || player.spectator || !player.alive || player.completedAt) return;
     const hit = room.puzzle.solution.some(cat => cat.row === row && cat.col === col);
     if (!hit) {
       player.alive = false; player.wrong.add(`${row}:${col}`);

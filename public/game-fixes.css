@@ -115,6 +115,20 @@
   .continue-panel .primary,.continue-panel .link-button { grid-column: auto; grid-row: auto; justify-self: start; }
 }
 
+/* Keep the nickname field available even on narrow phones. */
+@media (max-width: 400px) {
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 10px 0;
+  }
+  .topbar .brand { grid-column: 1 / -1; }
+  .topbar .player-name { display: flex; min-width: 0; margin-left: 0; }
+  .topbar .player-name input { width: 100%; min-width: 0; }
+  .topbar .quiet-button { align-self: center; white-space: nowrap; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .cat-reveal .cat-icon, .cat-reveal::after, .hidden-map b, .person.newly-eliminated { animation: none; }
 }
