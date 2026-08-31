@@ -12,19 +12,9 @@ const anonymousTag = localStorage.meowdokuAnonTag || String(Math.floor(Math.rand
 localStorage.meowdokuAnonTag = anonymousTag;
 nameInput.value = state.name;
 nameInput.addEventListener('input', () => { state.name = nameInput.value.trim(); localStorage.meowdokuName = state.name; });
-// const palette = ['#ff5d4a', '#ffb000', '#34c759', '#218cff', '#9656e8', '#ec3e8a', '#81cf27', '#00a6a6', '#ff7a00', '#d84a73'];
-const palette = [
-    '#D94F4F',
-    '#D99A00',
-    '#3FA45B',
-    '#3478C5',
-    '#7952B3',
-    '#C04F8A',
-    '#6FA832',
-    '#168F8F',
-    '#D66A16',
-    '#B84D68'
-];
+// Deep, hue *and* lightness varied so neighbouring regions stay apart even at
+// 10 × 10; consecutive entries differ most because region ids grow by BFS.
+const palette = ['#c4423d', '#c07c12', '#2c7a4b', '#2b6cb0', '#6b4b9e', '#b83f7d', '#8aa625', '#159490', '#8a4a1f', '#4b5768'];
 const api = async (url, options) => {
   const response = await fetch(url, options); const data = await response.json();
   if (!response.ok) throw new Error(data.error || '發生錯誤'); return data;
@@ -231,7 +221,7 @@ async function chooseCell(cell) {
     return;
   }
   const correct = state.single.solution.some(cat => cat.row === row && cat.col === col);
-  if (!correct) { state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
+  if (!correct) { playSfx('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
   state.cats.add(key); state.marks.delete(key);
   if (state.cats.size === state.single.size) {
     await api('/api/single-complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ visitorId: state.visitorId, name: playerName(), levelId: state.single.id }) });
@@ -242,7 +232,7 @@ async function chooseCell(cell) {
   } else {
       renderGame('答對了！');
   }
-  playCatReveal(row, col);
+  playSfx('meow'); playCatReveal(row, col);
 }
 
 async function showMultiplayer() {
@@ -280,8 +270,8 @@ socket.on('room-state', room => {
   }
   renderGame(); state.deathFlashRendered = true;
 });
-socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); renderGame('答對了！'); playCatReveal(row, col); } else { state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
-socket.on('match-started', () => { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
+socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); renderGame('答對了！'); playSfx('meow'); playCatReveal(row, col); } else { playSfx('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
+socket.on('match-started', () => { playSfx('go'); state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
 socket.on('player-eliminated', ({ playerId }) => { state.deathFlashId = playerId; state.deathFlashRendered = false; });
 socket.on('disconnect', () => {
   // The server removes a disconnected socket from its room. Clear the local
@@ -291,10 +281,10 @@ socket.on('disconnect', () => {
   state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear();
   home();
 });
-socket.on('final-sprint', ({ deadline, sprintSeconds }) => { state.room.deadline = deadline; if (sprintSeconds) state.room.sprintSeconds = sprintSeconds; renderGame(`第一位完成！${sprintSeconds || state.room.sprintSeconds} 秒最後衝刺開始。`); });
+socket.on('final-sprint', ({ deadline, sprintSeconds }) => { playSfx('sprint'); state.room.deadline = deadline; if (sprintSeconds) state.room.sprintSeconds = sprintSeconds; renderGame(`第一位完成！${sprintSeconds || state.room.sprintSeconds} 秒最後衝刺開始。`); });
 socket.on('game-finished', ({ results }) => { window.lastResults = results; renderGame('本局結束！'); showFinishNotice(results); });
 setInterval(() => document.querySelectorAll('[data-deadline]').forEach(node => { node.textContent = remainingSeconds(node.dataset.deadline); }), 250);
-setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { node.textContent = Math.max(0, Math.ceil((Number(node.dataset.countdown) - Date.now()) / 1000)); }), 100);
+setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { const t = Math.max(0, Math.ceil((Number(node.dataset.countdown) - Date.now()) / 1000)); if (!node.dataset.ticked || String(t) !== node.textContent) { node.dataset.ticked = '1'; node.textContent = t; if (t > 0) playSfx('tick'); } }), 100);
 
 function playCatReveal(row, col) {
   requestAnimationFrame(() => {
