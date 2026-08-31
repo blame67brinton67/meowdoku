@@ -11,11 +11,17 @@ const server = http.createServer(app);
 const io = new Server(server);
 const PORT = Number(process.env.PORT || 3000);
 const ADMIN_KEY = process.env.ADMIN_KEY || 'meowdoku-admin';
+const SPRINT_MIN = 15, SPRINT_MAX = 300, SPRINT_DEFAULT = 60;
 const DATA_DIR = path.join(__dirname, 'data');
 const LEVELS_PATH = path.join(DATA_DIR, 'levels.json');
 const SCORES_PATH = path.join(DATA_DIR, 'scores.json');
 const PUZZLE_POOL_PATH = path.join(DATA_DIR, 'multiplayer-puzzle-pool.json');
 const rooms = new Map();
+
+function clampSprintSeconds(value, fallback = SPRINT_DEFAULT) {
+  const seconds = Math.round(Number(value));
+  return Number.isFinite(seconds) ? Math.min(SPRINT_MAX, Math.max(SPRINT_MIN, seconds)) : fallback;
+}
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 app.use(express.json({ limit: '1mb' }));
@@ -135,7 +141,7 @@ function compactRoom(room) {
     puzzle: room.status === 'playing' || room.status === 'finished'
       ? publicLevel(room.puzzle)
       : { id: room.puzzle.id, name: room.puzzle.name, size: room.puzzle.size },
-    countdownEnds: room.countdownEnds, deadline: room.deadline,
+    countdownEnds: room.countdownEnds, deadline: room.deadline, sprintSeconds: room.sprintSeconds,
     players: [...room.players.values()].map(player => ({
       id: player.id, name: player.name, host: player.id === room.hostId, spectator: player.spectator, alive: player.alive,
       found: player.found.size, completedAt: player.completedAt,
@@ -171,13 +177,13 @@ function allPlayersResolved(room) {
 }
 
 io.on('connection', socket => {
-  socket.on('create-room', ({ name, playerId, roomName, levelId, size, visibility }, callback) => {
+  socket.on('create-room', ({ name, playerId, roomName, levelId, size, visibility, sprintSeconds }, callback) => {
     const puzzle = levelId ? levels.find(level => level.id === levelId) : takeMultiplayerPuzzle(size || 7);
     if (!puzzle) return callback({ error: '找不到關卡' });
     const code = nanoid(5).toUpperCase();
     const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId,
       visibility: visibility === 'private' ? 'private' : 'public',
-      players: new Map(), startedAt: null, deadline: null, timer: null };
+      players: new Map(), startedAt: null, deadline: null, timer: null, sprintSeconds: clampSprintSeconds(sprintSeconds) };
     rooms.set(code, room); joinRoom(socket, room, { name, playerId, spectator: false }); callback({ code });
   });
   socket.on('join-room', ({ code, name, playerId, spectator }, callback) => {
@@ -213,9 +219,10 @@ io.on('connection', socket => {
       player.completedAt = Date.now();
       if (allPlayersResolved(room)) { finishRoom(room); return; }
       if (!room.deadline) {
-        room.deadline = Date.now() + 60_000;
-        room.timer = setTimeout(() => finishRoom(room), 60_000);
-        io.to(room.code).emit('final-sprint', { deadline: room.deadline });
+        const sprintMs = room.sprintSeconds * 1000;
+        room.deadline = Date.now() + sprintMs;
+        room.timer = setTimeout(() => finishRoom(room), sprintMs);
+        io.to(room.code).emit('final-sprint', { deadline: room.deadline, sprintSeconds: room.sprintSeconds });
       }
     }
     emitRoomSoon(room);
@@ -232,6 +239,14 @@ io.on('connection', socket => {
     if (room.status !== 'lobby') return callback?.({ error: '倒數開始後不能再變更身分' });
     player.spectator = Boolean(spectator); player.alive = true;
     player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
+    emitRoom(room); callback?.({ ok: true });
+  });
+  socket.on('set-sprint-seconds', ({ code, playerId, seconds }, callback) => {
+    const room = rooms.get(code);
+    if (!room || room.hostId !== playerId) return callback?.({ error: '只有房主可以調整最後衝刺時間' });
+    if (room.status !== 'lobby') return callback?.({ error: '倒數開始後不能再調整最後衝刺時間' });
+    if (!Number.isFinite(Number(seconds))) return callback?.({ error: '請輸入有效的秒數' });
+    room.sprintSeconds = clampSprintSeconds(seconds, room.sprintSeconds);
     emitRoom(room); callback?.({ ok: true });
   });
   socket.on('restart-room', ({ code, playerId }, callback) => {

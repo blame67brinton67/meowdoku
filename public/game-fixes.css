@@ -84,6 +84,9 @@
 .person.eliminated small { color: #b4313d; }
 .watch-hint { margin: 12px 0 0; color: var(--teal); font-size: 12px; line-height: 1.5; }
 .role-toggle { width: 100%; margin-top: 12px; padding: 10px; border: 1px dashed rgba(35, 110, 103, .42); background: transparent; color: var(--teal); font-weight: 700; }
+.sprint-setting { display: grid; gap: 6px; width: 100%; margin-top: 12px; color: var(--muted); font-size: 12px; }
+.sprint-setting select { width: 100%; padding: 8px; border: 1px solid rgba(35, 110, 103, .24); border-radius: 5px; background: rgba(255, 255, 255, .65); color: var(--ink); }
+.sprint-setting.readonly { display: block; }
 .public-rooms { padding-bottom: 60px; }
 .public-room-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
 .public-room { display: grid; grid-template-columns: 38px 1fr auto; align-items: center; gap: 11px; padding: 16px; border: 1px solid var(--line); background: rgba(255,255,255,.48); text-align: left; color: var(--ink); }
