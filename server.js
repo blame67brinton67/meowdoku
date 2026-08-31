@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const { nanoid } = require('nanoid');
 const fs = require('fs');
 const path = require('path');
+const { generatePuzzle, countSolutions, clampSize } = require('./puzzle');
 
 const app = express();
 const server = http.createServer(app);
@@ -24,100 +25,6 @@ function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
 function writeJson(file, value) { fs.writeFileSync(file, JSON.stringify(value, null, 2)); }
-function shuffled(items) {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
-function neighbors(index, size) {
-  const row = Math.floor(index / size), col = index % size, result = [];
-  if (row) result.push(index - size);
-  if (row < size - 1) result.push(index + size);
-  if (col) result.push(index - 1);
-  if (col < size - 1) result.push(index + 1);
-  return result;
-}
-
-// Region growth guarantees connectivity.  We accept a board only after the
-// independent permutation solver confirms exactly one cat placement.
-function countSolutions(regions, size, stopAt = 2) {
-  const usedCols = new Set(), usedRegions = new Set();
-  let solutions = 0;
-  function search(row, previousCol) {
-    if (solutions >= stopAt) return;
-    if (row === size) { solutions++; return; }
-    for (let col = 0; col < size; col++) {
-      const region = regions[row * size + col];
-      // Rows are considered from top to bottom, so only the preceding row can
-      // contain a king-adjacent cat. Columns are already unique by this point.
-      if (usedCols.has(col) || usedRegions.has(region) || Math.abs(previousCol - col) <= 1) continue;
-      usedCols.add(col); usedRegions.add(region);
-      search(row + 1, col);
-      usedCols.delete(col); usedRegions.delete(region);
-    }
-  }
-  search(0, -99);
-  return solutions;
-}
-function randomNoTouchingColumns(size) {
-  // Build the answer row by row. Every choice is random among columns that
-  // have not appeared before and cannot touch the cat in the previous row.
-  const usedColumns = new Set(), columns = [];
-  for (let row = 0; row < size; row++) {
-    const candidates = Array.from({ length: size }, (_, column) => column)
-      .filter(column => !usedColumns.has(column) && (row === 0 || Math.abs(column - columns[row - 1]) > 1));
-    if (!candidates.length) return null;
-    const column = candidates[Math.floor(Math.random() * candidates.length)];
-    usedColumns.add(column); columns.push(column);
-  }
-  return columns;
-}
-function growRegionsWithMultiSourceBfs(size, cats) {
-  const regions = Array(size * size).fill(-1);
-  const frontiers = cats.map((cell, region) => {
-    regions[cell] = region;
-    return new Set(neighbors(cell, size));
-  });
-  let unassigned = size * size - cats.length;
-  // Each round first chooses a colour, not a cell. That gives every colour
-  // with an open frontier the same chance to grow one step, preventing a
-  // large region from snowballing merely because it owns more frontier cells.
-  while (unassigned) {
-    const expandable = [];
-    frontiers.forEach((frontier, region) => {
-      for (const cell of frontier) if (regions[cell] !== -1) frontier.delete(cell);
-      if (frontier.size) expandable.push(region);
-    });
-    if (!expandable.length) throw new Error('色塊擴張意外停止');
-    const region = expandable[Math.floor(Math.random() * expandable.length)];
-    const frontier = frontiers[region];
-    const options = [...frontier];
-    const cell = options[Math.floor(Math.random() * options.length)];
-    frontier.delete(cell);
-    if (regions[cell] !== -1) continue;
-    regions[cell] = region; unassigned--;
-    neighbors(cell, size).forEach(next => { if (regions[next] === -1) frontier.add(next); });
-  }
-  return regions;
-}
-function generatePuzzle(size = 7) {
-  size = Math.max(4, Math.min(10, Number(size) || 7));
-  // Reject the entire board whenever it has zero or multiple answers. This is
-  // intentionally a pure generate-and-verify loop: no fixed answer pattern
-  // and no post-generation alteration of the regions is used.
-  for (;;) {
-    const permutation = randomNoTouchingColumns(size);
-    if (!permutation) continue;
-    const cats = permutation.map((column, row) => row * size + column);
-    const regions = growRegionsWithMultiSourceBfs(size, cats);
-    if (countSolutions(regions, size) === 1) {
-      return { size, regions, solution: cats.map(cell => ({ row: Math.floor(cell / size), col: cell % size })) };
-    }
-  }
-}
 function loadLevels() {
   const levels = readJson(LEVELS_PATH, []);
   if (levels.length) {
@@ -140,19 +47,30 @@ let multiplayerPuzzlePool = readJson(PUZZLE_POOL_PATH, []);
 const refillingPoolSizes = new Set();
 const MULTIPLAYER_POOL_PER_SIZE = 4;
 function publicLevel(level) { return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt }; }
+// One puzzle per tick: the pool is refilled without holding up the socket
+// traffic of a match that is already running.
 function refillMultiplayerPool(size) {
   if (refillingPoolSizes.has(size)) return;
   refillingPoolSizes.add(size);
-  setImmediate(() => {
+  const addOne = () => {
+    if (multiplayerPuzzlePool.filter(puzzle => puzzle.size === size).length >= MULTIPLAYER_POOL_PER_SIZE) {
+      refillingPoolSizes.delete(size);
+      return;
+    }
     try {
-      const existing = multiplayerPuzzlePool.filter(puzzle => puzzle.size === size).length;
-      for (let count = existing; count < MULTIPLAYER_POOL_PER_SIZE; count++) multiplayerPuzzlePool.push(generatePuzzle(size));
+      multiplayerPuzzlePool.push(generatePuzzle(size));
       writeJson(PUZZLE_POOL_PATH, multiplayerPuzzlePool);
-    } finally { refillingPoolSizes.delete(size); }
-  });
+    } catch (error) {
+      console.error('補充多人題庫失敗', error);
+      refillingPoolSizes.delete(size);
+      return;
+    }
+    setImmediate(addOne);
+  };
+  setImmediate(addOne);
 }
 function takeMultiplayerPuzzle(size) {
-  const normalizedSize = Math.max(4, Math.min(10, Number(size) || 7));
+  const normalizedSize = clampSize(size);
   const index = multiplayerPuzzlePool.findIndex(puzzle => puzzle.size === normalizedSize);
   const puzzle = index < 0 ? generatePuzzle(normalizedSize) : multiplayerPuzzlePool.splice(index, 1)[0];
   if (index >= 0) writeJson(PUZZLE_POOL_PATH, multiplayerPuzzlePool);
@@ -225,7 +143,19 @@ function compactRoom(room) {
     }))
   };
 }
-function emitRoom(room) { io.to(room.code).emit('room-state', compactRoom(room)); }
+// A room state carries every player's board, so the frantic events — guesses
+// and pencil marks — are coalesced into at most one broadcast per interval
+// instead of one per keystroke. Lifecycle changes still go out at once.
+const ROOM_BROADCAST_INTERVAL = 50;
+function emitRoom(room) {
+  clearTimeout(room.broadcastTimer); room.broadcastTimer = null;
+  room.lastBroadcast = Date.now();
+  io.to(room.code).emit('room-state', compactRoom(room));
+}
+function emitRoomSoon(room) {
+  if (room.broadcastTimer) return;
+  room.broadcastTimer = setTimeout(() => emitRoom(room), Math.max(0, ROOM_BROADCAST_INTERVAL - (Date.now() - (room.lastBroadcast || 0))));
+}
 function orderedResults(room) {
   return [...room.players.values()].filter(p => p.completedAt).sort((a, b) => a.completedAt - b.completedAt)
     .map((p, index) => ({ rank: index + 1, name: p.name, time: ((p.completedAt - room.startedAt) / 1000).toFixed(1) }));
@@ -233,7 +163,7 @@ function orderedResults(room) {
 function finishRoom(room) {
   if (room.status !== 'playing') return;
   room.status = 'finished'; clearTimeout(room.timer);
-  io.to(room.code).emit('game-finished', { results: orderedResults(room) }); emitRoom(room);
+  emitRoom(room); io.to(room.code).emit('game-finished', { results: orderedResults(room) });
 }
 function allPlayersResolved(room) {
   const racers = [...room.players.values()].filter(player => !player.spectator);
@@ -275,7 +205,7 @@ io.on('connection', socket => {
     if (!hit) {
       player.alive = false; player.wrong.add(`${row}:${col}`);
       socket.emit('guess-result', { row, col, hit: false }); io.to(room.code).emit('player-eliminated', { playerId, row, col });
-      if (allPlayersResolved(room)) finishRoom(room); else emitRoom(room);
+      if (allPlayersResolved(room)) finishRoom(room); else emitRoomSoon(room);
       return;
     }
     player.found.add(`${row}:${col}`); socket.emit('guess-result', { row, col, hit: true });
@@ -288,13 +218,13 @@ io.on('connection', socket => {
         io.to(room.code).emit('final-sprint', { deadline: room.deadline });
       }
     }
-    emitRoom(room);
+    emitRoomSoon(room);
   });
   socket.on('marks-update', ({ code, playerId, marks }) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
     if (!room || !player || room.status !== 'playing' || player.spectator || !player.alive || !Array.isArray(marks)) return;
     player.marks = new Set(marks.filter(key => typeof key === 'string').slice(0, room.puzzle.size * room.puzzle.size));
-    emitRoom(room);
+    emitRoomSoon(room);
   });
   socket.on('set-lobby-role', ({ code, playerId, spectator }, callback) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
@@ -321,7 +251,7 @@ io.on('connection', socket => {
       if (!removed) continue;
       room.players.delete(removed.id);
       if (removed.id === room.hostId) room.hostId = [...room.players.values()].find(player => !player.spectator)?.id || [...room.players.keys()][0];
-      if (!room.players.size) { clearTimeout(room.timer); clearTimeout(room.countdownTimer); rooms.delete(room.code); } else emitRoom(room);
+      if (!room.players.size) { clearTimeout(room.timer); clearTimeout(room.countdownTimer); clearTimeout(room.broadcastTimer); rooms.delete(room.code); } else emitRoom(room);
       break;
     }
   });

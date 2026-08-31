@@ -4,7 +4,7 @@ const socket = io();
 const state = {
   visitorId: localStorage.visitorId || crypto.randomUUID(),
   name: localStorage.meowdokuName || '',
-  mode: 'home', single: null, room: null, marks: new Set(), cats: new Set(), dragged: false, dragMarking: false,
+  mode: 'home', single: null, room: null, marks: new Set(), cats: new Set(), pending: new Set(), dragged: false, dragMarking: false,
   touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false
 };
 localStorage.visitorId = state.visitorId;
@@ -76,8 +76,13 @@ async function startSingle(id) {
   if (!state.levels.length) state.levels = await api('/api/levels');
   state.single = await api(`/api/levels/${id}`); state.mode = 'single'; state.singleCompleted = false; state.nextSingleId = null; resetBoard(); renderGame();
 }
-function resetBoard() { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.dragged = false; }
+function resetBoard() { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.dragged = false; }
 function currentPuzzle() { return state.mode === 'single' ? state.single : state.room?.puzzle; }
+// Re-creating the whole view costs a full board rebuild plus a fresh set of
+// listeners on every cell. In a room that happens on every broadcast, which is
+// why a click used to feel sticky, so anything that leaves the page structure
+// intact takes the patch path instead.
+let renderedLayout = '';
 function renderGame(message = '') {
   const puzzle = currentPuzzle(); if (!puzzle) return;
   const room = state.room, me = room?.players.find(p => p.id === state.visitorId), isSpectator = me?.spectator;
@@ -92,20 +97,45 @@ function renderGame(message = '') {
     ? `<div class="hidden-map"><span>${room.status === 'countdown' ? '<b data-countdown="' + room.countdownEnds + '">3</b>' : '♟'}</span><h2>${room.status === 'countdown' ? '即將開始！' : '地圖已封印'}</h2><p>${room.status === 'countdown' ? '倒數結束後，題目會同時揭曉。' : '房主開始遊戲後，所有人會同時看到題目。'}</p></div>`
     : `<div class="board-wrap">${renderBoard(puzzle, Boolean(isViewing || (state.mode === 'multi' && room.status !== 'playing')), viewedBoard(me, isViewing))}</div>`;
   const nextAction = state.mode === 'single' && state.singleCompleted ? `<div class="next-action">${state.nextSingleId ? '<button class="primary" id="next-level">前往下一關 →</button>' : '<button class="primary" id="next-level">回到關卡列表</button>'}</div>` : '';
+  const layout = [state.mode, room?.code || '', puzzle.id || '', puzzle.size, room?.status || '', waitingForRoom, Boolean(isViewing), state.singleCompleted, state.nextSingleId].join('|');
+  if (layout === renderedLayout && document.querySelector('.game-layout')) {
+    patchGame(puzzle, room, me, isViewing, message);
+    return;
+  }
+  renderedLayout = layout;
   view.innerHTML = `<section class="game-layout"><div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div>${state.mode === 'single' ? `<p class="eyebrow">SOLO • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div></div><div class="game-status">${state.mode === 'single' ? `<span>找出 <b>${state.cats.size} / ${puzzle.size}</b> 隻貓咪</span>` : gameStatus(room, me)}<span id="game-message">${message}</span></div>${boardArea}${footer}${nextAction}</div>${state.mode === 'multi' ? renderRoomPanel(room, me) : '<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>點錯一格，挑戰失敗</li></ul></aside>'}</section>`;
   document.querySelector('#quit').onclick = state.mode === 'single' ? showLevels : leaveRoom;
   document.querySelector('#next-level')?.addEventListener('click', () => state.nextSingleId ? startSingle(state.nextSingleId) : showLevels());
   bindBoard(); bindRoomButtons();
+}
+function patchGame(puzzle, room, me, isViewing, message) {
+  document.querySelector('.game-status').innerHTML = `${state.mode === 'single' ? `<span>找出 <b>${state.cats.size} / ${puzzle.size}</b> 隻貓咪</span>` : gameStatus(room, me)}<span id="game-message">${message}</span>`;
+  patchBoard(viewedBoard(me, isViewing));
+  if (state.mode !== 'multi') return;
+  const panel = document.querySelector('.room-panel'), html = renderRoomPanel(room, me);
+  if (panel && panel.outerHTML !== html) { panel.outerHTML = html; bindRoomButtons(); }
+}
+function patchBoard(boardState) {
+  for (const cell of document.querySelectorAll('.cell')) {
+    const key = `${cell.dataset.row}:${cell.dataset.col}`;
+    const cat = boardState.cats.has(key), wrong = Boolean(boardState.wrong?.has(key)), mark = boardState.marks.has(key);
+    cell.classList.toggle('cat', cat); cell.classList.toggle('wrong', wrong); cell.classList.toggle('mark', mark && !cat && !wrong);
+    cell.classList.toggle('pending', state.pending.has(key) && !cat && !wrong);
+    const content = cellContent(cat, wrong, mark);
+    if (cell.innerHTML !== content) cell.innerHTML = content;
+  }
 }
 function viewedBoard(me, isViewing) {
   if (state.mode !== 'multi' || !isViewing) return { cats: state.cats, marks: state.marks, wrong: state.wrong };
   const target = state.room.players.find(player => player.id === state.watchingPlayerId && !player.spectator) || state.room.players.find(player => !player.spectator);
   return { cats: new Set(target?.cats || []), marks: new Set(target?.marks || []), wrong: new Set(target?.wrong || []) };
 }
+function cellContent(cat, wrong, mark) { return cat ? '<span class="cat-icon">🐈</span>' : wrong || mark ? '×' : ''; }
 function renderBoard(puzzle, locked, boardState = { cats: state.cats, marks: state.marks, wrong: state.wrong }) {
   return `<div class="board ${locked ? 'locked' : ''}" style="--n:${puzzle.size}">${puzzle.regions.map((region, cell) => {
     const row = Math.floor(cell / puzzle.size), col = cell % puzzle.size, key = `${row}:${col}`;
-    return `<button class="cell ${boardState.cats.has(key) ? 'cat' : ''} ${boardState.marks.has(key) ? 'mark' : ''} ${boardState.wrong?.has(key) ? 'wrong' : ''}" style="--region:${palette[region % palette.length]}" data-row="${row}" data-col="${col}" aria-label="第 ${row + 1} 行第 ${col + 1} 列">${boardState.cats.has(key) ? '<span class="cat-icon">🐈</span>' : boardState.wrong?.has(key) ? '×' : boardState.marks.has(key) ? '×' : ''}</button>`;
+    const cat = boardState.cats.has(key), wrong = Boolean(boardState.wrong?.has(key)), mark = boardState.marks.has(key);
+    return `<button class="cell ${cat ? 'cat' : ''} ${mark && !cat && !wrong ? 'mark' : ''} ${wrong ? 'wrong' : ''} ${state.pending.has(key) && !cat && !wrong ? 'pending' : ''}" style="--region:${palette[region % palette.length]}" data-row="${row}" data-col="${col}" aria-label="第 ${row + 1} 行第 ${col + 1} 列">${cellContent(cat, wrong, mark)}</button>`;
   }).join('')}</div>`;
 }
 function gameStatus(room, me) {
@@ -168,13 +198,30 @@ function applyMark(cell, shouldMark) {
   const key = `${cell.dataset.row}:${cell.dataset.col}`;
   if (shouldMark) state.marks.add(key); else state.marks.delete(key);
   cell.classList.toggle('mark', shouldMark); cell.textContent = shouldMark ? '×' : '';
-  if (state.mode === 'multi') socket.emit('marks-update', { code: state.room.code, playerId: state.visitorId, marks: [...state.marks] });
+  if (state.mode === 'multi') queueMarksSync();
+}
+// Drag-marking crosses a dozen cells in a moment. Sending each one separately
+// asked the server to broadcast a dozen room states, so every player in the
+// room paid for one player's scribbling; the notes travel in one late packet.
+let marksSyncTimer = null;
+function queueMarksSync() {
+  if (marksSyncTimer) return;
+  marksSyncTimer = setTimeout(() => {
+    marksSyncTimer = null;
+    if (state.mode === 'multi' && state.room) socket.emit('marks-update', { code: state.room.code, playerId: state.visitorId, marks: [...state.marks] });
+  }, 150);
 }
 async function chooseCell(cell) {
   if (cell.closest('.locked')) return;
   const row = Number(cell.dataset.row), col = Number(cell.dataset.col), key = `${row}:${col}`;
   if (state.cats.has(key)) return;
-  if (state.mode === 'multi') { socket.emit('guess', { code: state.room.code, playerId: state.visitorId, row, col }); return; }
+  if (state.mode === 'multi') {
+    if (state.pending.has(key)) return;
+    // The verdict belongs to the server, but the tap has to look answered now.
+    state.pending.add(key); cell.classList.add('pending');
+    socket.emit('guess', { code: state.room.code, playerId: state.visitorId, row, col });
+    return;
+  }
   const correct = state.single.solution.some(cat => cat.row === row && cat.col === col);
   if (!correct) { state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
   state.cats.add(key); state.marks.delete(key);
@@ -224,15 +271,15 @@ socket.on('room-state', room => {
   }
   renderGame(); state.deathFlashRendered = true;
 });
-socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; if (hit) { state.cats.add(key); state.marks.delete(key); renderGame('答對了！'); playCatReveal(row, col); } else { state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
-socket.on('match-started', () => { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
+socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); renderGame('答對了！'); playCatReveal(row, col); } else { state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
+socket.on('match-started', () => { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
 socket.on('player-eliminated', ({ playerId }) => { state.deathFlashId = playerId; state.deathFlashRendered = false; });
 socket.on('disconnect', () => {
   // The server removes a disconnected socket from its room. Clear the local
   // mirror as well, so a returning tab never shows a stale, non-member room.
   if (state.mode !== 'multi') return;
   state.room = null; state.watchingPlayerId = null;
-  state.cats.clear(); state.marks.clear(); state.wrong.clear();
+  state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear();
   home();
 });
 socket.on('final-sprint', ({ deadline }) => { state.room.deadline = deadline; renderGame('第一位完成！60 秒最後衝刺開始。'); });

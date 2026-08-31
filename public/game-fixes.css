@@ -27,6 +27,9 @@
 .cell.cat { background: radial-gradient(circle at 50% 38%, rgba(255,255,255,.72), transparent 39%), color-mix(in srgb, var(--region) 68%, white); }
 .cell.mark { color: rgba(32, 34, 42, .48); font-size: clamp(25px, 4.5vw, 46px); }
 .cell.wrong { color: #c9303e; background: #ffe5e5; font-size: clamp(28px, 5vw, 52px); text-shadow: none; }
+/* A tap in a room is answered by the server, so the cell acknowledges it right away. */
+.cell.pending { box-shadow: inset 0 0 0 3px rgba(32, 34, 42, .32); animation: cell-pending .9s ease-in-out infinite; }
+@keyframes cell-pending { 50% { opacity: .62; } }
 .cat-icon { display: inline-grid; place-items: center; filter: drop-shadow(0 4px 2px rgba(32, 34, 42, .16)); }
 .cat-reveal .cat-icon { animation: cat-reveal .64s cubic-bezier(.18,.89,.32,1.42); }
 .cat-reveal::after { content: "✦  ✦  ✦"; position: absolute; color: rgba(255,255,255,.9); font-size: clamp(12px,2vw,20px); animation: sparkle .62s ease-out forwards; pointer-events: none; }
@@ -130,5 +133,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .cat-reveal .cat-icon, .cat-reveal::after, .hidden-map b, .person.newly-eliminated { animation: none; }
+  .cat-reveal .cat-icon, .cat-reveal::after, .hidden-map b, .person.newly-eliminated, .cell.pending { animation: none; }
 }
