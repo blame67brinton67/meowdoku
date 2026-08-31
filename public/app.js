@@ -213,7 +213,7 @@ async function chooseCell(cell) {
     return;
   }
   const correct = state.single.solution.some(cat => cat.row === row && cat.col === col);
-  if (!correct) { state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
+  if (!correct) { playSfx('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
   state.cats.add(key); state.marks.delete(key);
   if (state.cats.size === state.single.size) {
     await api('/api/single-complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ visitorId: state.visitorId, name: playerName(), levelId: state.single.id }) });
@@ -224,7 +224,7 @@ async function chooseCell(cell) {
   } else {
       renderGame('答對了！');
   }
-  playCatReveal(row, col);
+  playSfx('meow'); playCatReveal(row, col);
 }
 
 async function showMultiplayer() {
@@ -261,8 +261,8 @@ socket.on('room-state', room => {
   }
   renderGame(); state.deathFlashRendered = true;
 });
-socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); renderGame('答對了！'); playCatReveal(row, col); } else { state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
-socket.on('match-started', () => { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
+socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); renderGame('答對了！'); playSfx('meow'); playCatReveal(row, col); } else { playSfx('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
+socket.on('match-started', () => { playSfx('go'); state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
 socket.on('player-eliminated', ({ playerId }) => { state.deathFlashId = playerId; state.deathFlashRendered = false; });
 socket.on('disconnect', () => {
   // The server removes a disconnected socket from its room. Clear the local
@@ -272,10 +272,10 @@ socket.on('disconnect', () => {
   state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear();
   home();
 });
-socket.on('final-sprint', ({ deadline }) => { state.room.deadline = deadline; renderGame('第一位完成！60 秒最後衝刺開始。'); });
+socket.on('final-sprint', ({ deadline }) => { playSfx('sprint'); state.room.deadline = deadline; renderGame('第一位完成！60 秒最後衝刺開始。'); });
 socket.on('game-finished', ({ results }) => { window.lastResults = results; renderGame('本局結束！'); showFinishNotice(results); });
 setInterval(() => document.querySelectorAll('[data-deadline]').forEach(node => { node.textContent = remainingSeconds(node.dataset.deadline); }), 250);
-setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { node.textContent = Math.max(0, Math.ceil((Number(node.dataset.countdown) - Date.now()) / 1000)); }), 100);
+setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { const t = Math.max(0, Math.ceil((Number(node.dataset.countdown) - Date.now()) / 1000)); if (!node.dataset.ticked || String(t) !== node.textContent) { node.dataset.ticked = '1'; node.textContent = t; if (t > 0) playSfx('tick'); } }), 100);
 
 function playCatReveal(row, col) {
   requestAnimationFrame(() => {
