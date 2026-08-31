@@ -177,12 +177,29 @@ app.get('/api/levels/:id', (req, res) => {
   res.json(level); // Single-player boards need the local answer for instant feedback.
 });
 app.get('/api/leaderboard', (_req, res) => res.json(scoreRows()));
+app.get('/api/public-rooms', (_req, res) => {
+  const visibleRooms = [...rooms.values()]
+    .filter(room => room.visibility === 'public' && room.status !== 'finished')
+    .map(room => ({
+      code: room.code, name: room.name, size: room.puzzle.size, status: room.status,
+      players: [...room.players.values()].filter(player => !player.spectator).length,
+      spectators: [...room.players.values()].filter(player => player.spectator).length
+    }));
+  res.json(visibleRooms);
+});
+app.get('/api/progress/:visitorId', (req, res) => {
+  const scores = readJson(SCORES_PATH, {});
+  const entry = scores[req.params.visitorId];
+  res.json({ cleared: entry?.cleared || [] });
+});
 app.post('/api/single-complete', (req, res) => {
   const { visitorId, name, levelId } = req.body || {};
-  if (!visitorId || !name || !levels.some(level => level.id === levelId)) return res.status(400).json({ error: '資料不完整' });
+  const levelIndex = levels.findIndex(level => level.id === levelId);
+  if (!visitorId || !name || levelIndex < 0) return res.status(400).json({ error: '資料不完整' });
   const scores = readJson(SCORES_PATH, {});
   const entry = scores[visitorId] || { name: String(name).slice(0, 20), cleared: [] };
   entry.name = String(name).slice(0, 20);
+  if (levelIndex > 0 && !entry.cleared.includes(levels[levelIndex - 1].id)) return res.status(403).json({ error: '請先完成前一關' });
   if (!entry.cleared.includes(levelId)) entry.cleared.push(levelId);
   scores[visitorId] = entry;
   writeJson(SCORES_PATH, scores);
@@ -200,14 +217,16 @@ app.post('/api/admin/levels', (req, res) => {
 
 function compactRoom(room) {
   return {
-    code: room.code, name: room.name, status: room.status, hostId: room.hostId,
+    code: room.code, name: room.name, status: room.status, hostId: room.hostId, visibility: room.visibility,
     // Do not reveal the region arrangement to waiting players or spectators.
-    puzzle: room.status === 'lobby'
-      ? { id: room.puzzle.id, name: room.puzzle.name, size: room.puzzle.size }
-      : publicLevel(room.puzzle),
+    puzzle: room.status === 'playing' || room.status === 'finished'
+      ? publicLevel(room.puzzle)
+      : { id: room.puzzle.id, name: room.puzzle.name, size: room.puzzle.size },
+    countdownEnds: room.countdownEnds, deadline: room.deadline,
     players: [...room.players.values()].map(player => ({
-      id: player.id, name: player.name, spectator: player.spectator, alive: player.alive,
-      found: player.found.size, completedAt: player.completedAt
+      id: player.id, name: player.name, host: player.id === room.hostId, spectator: player.spectator, alive: player.alive,
+      found: player.found.size, completedAt: player.completedAt,
+      cats: [...player.found], marks: [...player.marks], wrong: [...player.wrong]
     }))
   };
 }
@@ -221,37 +240,53 @@ function finishRoom(room) {
   room.status = 'finished'; clearTimeout(room.timer);
   io.to(room.code).emit('game-finished', { results: orderedResults(room) }); emitRoom(room);
 }
+function allPlayersResolved(room) {
+  const racers = [...room.players.values()].filter(player => !player.spectator);
+  return racers.length > 0 && racers.every(player => player.completedAt || !player.alive);
+}
 
 io.on('connection', socket => {
-  socket.on('create-room', ({ name, playerId, roomName, levelId, size }, callback) => {
+  socket.on('create-room', ({ name, playerId, roomName, levelId, size, visibility }, callback) => {
     const puzzle = levelId ? levels.find(level => level.id === levelId) : generatePuzzle(size || 5);
     if (!puzzle) return callback({ error: '找不到關卡' });
     const code = nanoid(5).toUpperCase();
     const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId,
+      visibility: visibility === 'private' ? 'private' : 'public',
       players: new Map(), startedAt: null, deadline: null, timer: null };
     rooms.set(code, room); joinRoom(socket, room, { name, playerId, spectator: false }); callback({ code });
   });
   socket.on('join-room', ({ code, name, playerId, spectator }, callback) => {
     const room = rooms.get(String(code || '').toUpperCase());
     if (!room) return callback({ error: '房間不存在或已關閉' });
-    if (room.status === 'finished') return callback({ error: '這局已結束' });
-    joinRoom(socket, room, { name, playerId, spectator: Boolean(spectator) }); callback({ ok: true });
+    // A match's player roster locks as soon as its countdown begins.
+    joinRoom(socket, room, { name, playerId, spectator: Boolean(spectator) || room.status !== 'lobby' }); callback({ ok: true, spectator: room.status !== 'lobby' || Boolean(spectator) });
   });
   socket.on('start-game', ({ code, playerId }, callback) => {
     const room = rooms.get(code);
     if (!room || room.hostId !== playerId) return callback?.({ error: '只有房主可以開始' });
     if (room.status !== 'lobby') return callback?.({ error: '遊戲已開始' });
     if (![...room.players.values()].some(player => !player.spectator)) return callback?.({ error: '至少需要一位玩家' });
-    room.status = 'playing'; room.startedAt = Date.now(); emitRoom(room); callback?.({ ok: true });
+    room.status = 'countdown'; room.countdownEnds = Date.now() + 3000; emitRoom(room);
+    room.countdownTimer = setTimeout(() => {
+      room.status = 'playing'; room.startedAt = Date.now(); room.countdownEnds = null;
+      io.to(room.code).emit('match-started'); emitRoom(room);
+    }, 3000);
+    callback?.({ ok: true });
   });
   socket.on('guess', ({ code, playerId, row, col }, callback) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
     if (!room || !player || room.status !== 'playing' || player.spectator || !player.alive) return;
     const hit = room.puzzle.solution.some(cat => cat.row === row && cat.col === col);
-    if (!hit) { player.alive = false; socket.emit('guess-result', { row, col, hit: false }); emitRoom(room); return; }
+    if (!hit) {
+      player.alive = false; player.wrong.add(`${row}:${col}`);
+      socket.emit('guess-result', { row, col, hit: false }); io.to(room.code).emit('player-eliminated', { playerId, row, col });
+      if (allPlayersResolved(room)) finishRoom(room); else emitRoom(room);
+      return;
+    }
     player.found.add(`${row}:${col}`); socket.emit('guess-result', { row, col, hit: true });
     if (player.found.size === room.puzzle.size) {
       player.completedAt = Date.now();
+      if (allPlayersResolved(room)) { finishRoom(room); return; }
       if (!room.deadline) {
         room.deadline = Date.now() + 60_000;
         room.timer = setTimeout(() => finishRoom(room), 60_000);
@@ -260,20 +295,45 @@ io.on('connection', socket => {
     }
     emitRoom(room);
   });
+  socket.on('marks-update', ({ code, playerId, marks }) => {
+    const room = rooms.get(code), player = room?.players.get(playerId);
+    if (!room || !player || room.status !== 'playing' || player.spectator || !player.alive || !Array.isArray(marks)) return;
+    player.marks = new Set(marks.filter(key => typeof key === 'string').slice(0, room.puzzle.size * room.puzzle.size));
+    emitRoom(room);
+  });
+  socket.on('set-lobby-role', ({ code, playerId, spectator }, callback) => {
+    const room = rooms.get(code), player = room?.players.get(playerId);
+    if (!room || !player) return callback?.({ error: '找不到房間成員' });
+    if (room.status !== 'lobby') return callback?.({ error: '倒數開始後不能再變更身分' });
+    player.spectator = Boolean(spectator); player.alive = true;
+    player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
+    emitRoom(room); callback?.({ ok: true });
+  });
+  socket.on('restart-room', ({ code, playerId }, callback) => {
+    const room = rooms.get(code);
+    if (!room || room.hostId !== playerId) return callback?.({ error: '只有房主可以重新開始' });
+    if (room.status !== 'finished') return callback?.({ error: '本局尚未結束' });
+    clearTimeout(room.timer); clearTimeout(room.countdownTimer);
+    room.puzzle = generatePuzzle(room.puzzle.size); room.status = 'lobby'; room.startedAt = null; room.deadline = null; room.countdownEnds = null;
+    for (const player of room.players.values()) {
+      player.alive = true; player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
+    }
+    emitRoom(room); callback?.({ ok: true });
+  });
   socket.on('disconnect', () => {
     for (const room of rooms.values()) {
       const removed = [...room.players.values()].find(player => player.socketId === socket.id);
       if (!removed) continue;
       room.players.delete(removed.id);
       if (removed.id === room.hostId) room.hostId = [...room.players.values()].find(player => !player.spectator)?.id || [...room.players.keys()][0];
-      if (!room.players.size) { clearTimeout(room.timer); rooms.delete(room.code); } else emitRoom(room);
+      if (!room.players.size) { clearTimeout(room.timer); clearTimeout(room.countdownTimer); rooms.delete(room.code); } else emitRoom(room);
       break;
     }
   });
 });
 function joinRoom(socket, room, { name, playerId, spectator }) {
   for (const existing of room.players.values()) if (existing.id === playerId) room.players.delete(existing.id);
-  const player = { id: playerId, name: String(name || '神秘貓奴').slice(0, 20), spectator, socketId: socket.id, alive: true, found: new Set(), completedAt: null };
+  const player = { id: playerId, name: String(name || '神秘貓奴').slice(0, 20), spectator, socketId: socket.id, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
   room.players.set(playerId, player); socket.join(room.code); emitRoom(room);
 }
 
