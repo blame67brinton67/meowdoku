@@ -11,6 +11,8 @@ const server = http.createServer(app);
 const io = new Server(server);
 const PORT = Number(process.env.PORT || 3000);
 const ADMIN_KEY = process.env.ADMIN_KEY || 'meowdoku-admin';
+const IDLE_GRACE = 20_000;
+const ALL_SPECTATOR_CLOSE = 10 * 60_000;
 const DATA_DIR = path.join(__dirname, 'data');
 const LEVELS_PATH = path.join(DATA_DIR, 'levels.json');
 const SCORES_PATH = path.join(DATA_DIR, 'scores.json');
@@ -137,7 +139,7 @@ function compactRoom(room) {
       : { id: room.puzzle.id, name: room.puzzle.name, size: room.puzzle.size },
     countdownEnds: room.countdownEnds, deadline: room.deadline,
     players: [...room.players.values()].map(player => ({
-      id: player.id, name: player.name, host: player.id === room.hostId, spectator: player.spectator, alive: player.alive,
+      id: player.id, name: player.name, host: player.id === room.hostId, spectator: player.spectator, idle: player.idle, alive: player.alive,
       found: player.found.size, completedAt: player.completedAt,
       cats: [...player.found], marks: [...player.marks], wrong: [...player.wrong]
     }))
@@ -155,6 +157,35 @@ function emitRoom(room) {
 function emitRoomSoon(room) {
   if (room.broadcastTimer) return;
   room.broadcastTimer = setTimeout(() => emitRoom(room), Math.max(0, ROOM_BROADCAST_INTERVAL - (Date.now() - (room.lastBroadcast || 0))));
+}
+function racers(room) { return [...room.players.values()].filter(p => !p.spectator); }
+function reassignHost(room) {
+  const people = [...room.players.values()];
+  room.hostId = (people.find(p => p.socketId && !p.spectator) || people.find(p => p.socketId) || people[0])?.id || null;
+}
+function closeRoom(room, reason) {
+  clearTimeout(room.timer); clearTimeout(room.countdownTimer); clearTimeout(room.broadcastTimer); clearTimeout(room.spectatorTimer);
+  for (const player of room.players.values()) clearTimeout(player.idleTimer);
+  rooms.delete(room.code);
+  if (reason) io.to(room.code).emit('room-closed', { reason });
+}
+// The 10 minute clock only runs while nobody is actually racing.
+function checkAllSpectator(room) {
+  if (!rooms.has(room.code)) return;
+  if (racers(room).length) { clearTimeout(room.spectatorTimer); room.spectatorTimer = null; return; }
+  if (room.spectatorTimer) return;
+  room.spectatorTimer = setTimeout(() => closeRoom(room, '房間只剩觀戰者，已自動關閉'), ALL_SPECTATOR_CLOSE);
+}
+function makeIdleSpectator(room, player) {
+  player.idleTimer = null;
+  if (!rooms.has(room.code) || player.socketId) return;
+  player.idle = true; player.spectator = true; player.alive = true;
+  if (player.id === room.hostId) reassignHost(room);
+  // Nobody left to notify, so the room does not need to linger.
+  if (![...room.players.values()].some(p => p.socketId)) return closeRoom(room, null);
+  if (room.status === 'countdown' && !racers(room).length) { clearTimeout(room.countdownTimer); room.status = 'lobby'; room.countdownEnds = null; }
+  else if (room.status === 'playing' && (!racers(room).length || allPlayersResolved(room))) { finishRoom(room); checkAllSpectator(room); return; }
+  emitRoom(room); checkAllSpectator(room);
 }
 function orderedResults(room) {
   return [...room.players.values()].filter(p => p.completedAt).sort((a, b) => a.completedAt - b.completedAt)
@@ -177,7 +208,7 @@ io.on('connection', socket => {
     const code = nanoid(5).toUpperCase();
     const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId,
       visibility: visibility === 'private' ? 'private' : 'public',
-      players: new Map(), startedAt: null, deadline: null, timer: null };
+      players: new Map(), startedAt: null, deadline: null, timer: null, spectatorTimer: null };
     rooms.set(code, room); joinRoom(socket, room, { name, playerId, spectator: false }); callback({ code });
   });
   socket.on('join-room', ({ code, name, playerId, spectator }, callback) => {
@@ -232,7 +263,7 @@ io.on('connection', socket => {
     if (room.status !== 'lobby') return callback?.({ error: '倒數開始後不能再變更身分' });
     player.spectator = Boolean(spectator); player.alive = true;
     player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
-    emitRoom(room); callback?.({ ok: true });
+    emitRoom(room); checkAllSpectator(room); callback?.({ ok: true });
   });
   socket.on('restart-room', ({ code, playerId }, callback) => {
     const room = rooms.get(code);
@@ -243,23 +274,46 @@ io.on('connection', socket => {
     for (const player of room.players.values()) {
       player.alive = true; player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
     }
-    emitRoom(room); callback?.({ ok: true });
+    emitRoom(room); checkAllSpectator(room); callback?.({ ok: true });
+  });
+  socket.on('resume-room', ({ code, playerId, name }, callback) => {
+    const room = rooms.get(String(code || '').toUpperCase());
+    if (!room) return callback?.({ error: '房間不存在或已關閉' });
+    const player = room.players.get(playerId);
+    if (!player) { joinRoom(socket, room, { name, playerId, spectator: true }); return callback?.({ ok: true, spectator: true, movedToSpectator: true }); }
+    const wasIdle = player.idle;
+    clearTimeout(player.idleTimer); player.idleTimer = null;
+    player.socketId = socket.id; player.disconnectedAt = null; player.idle = false;
+    socket.join(room.code); emitRoom(room); checkAllSpectator(room);
+    callback?.({ ok: true, spectator: player.spectator, movedToSpectator: wasIdle && player.spectator });
+  });
+  socket.on('leave-room', ({ code, playerId }, callback) => {
+    const room = rooms.get(code); const player = room?.players.get(playerId);
+    callback?.({ ok: true });
+    if (!room || !player) return;
+    clearTimeout(player.idleTimer); room.players.delete(playerId);
+    if (playerId === room.hostId) reassignHost(room);
+    if (![...room.players.values()].some(p => p.socketId)) return closeRoom(room, null);
+    if (room.status === 'countdown' && !racers(room).length) { clearTimeout(room.countdownTimer); room.status = 'lobby'; room.countdownEnds = null; emitRoom(room); }
+    else if (room.status === 'playing' && (!racers(room).length || allPlayersResolved(room))) finishRoom(room);
+    else emitRoom(room);
+    checkAllSpectator(room);
   });
   socket.on('disconnect', () => {
     for (const room of rooms.values()) {
-      const removed = [...room.players.values()].find(player => player.socketId === socket.id);
-      if (!removed) continue;
-      room.players.delete(removed.id);
-      if (removed.id === room.hostId) room.hostId = [...room.players.values()].find(player => !player.spectator)?.id || [...room.players.keys()][0];
-      if (!room.players.size) { clearTimeout(room.timer); clearTimeout(room.countdownTimer); clearTimeout(room.broadcastTimer); rooms.delete(room.code); } else emitRoom(room);
+      const player = [...room.players.values()].find(p => p.socketId === socket.id);
+      if (!player) continue;
+      player.socketId = null; player.disconnectedAt = Date.now();
+      clearTimeout(player.idleTimer);
+      player.idleTimer = setTimeout(() => makeIdleSpectator(room, player), IDLE_GRACE);
       break;
     }
   });
 });
 function joinRoom(socket, room, { name, playerId, spectator }) {
-  for (const existing of room.players.values()) if (existing.id === playerId) room.players.delete(existing.id);
-  const player = { id: playerId, name: String(name || '神秘貓奴').slice(0, 20), spectator, socketId: socket.id, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
-  room.players.set(playerId, player); socket.join(room.code); emitRoom(room);
+  for (const existing of room.players.values()) if (existing.id === playerId) { clearTimeout(existing.idleTimer); room.players.delete(existing.id); }
+  const player = { id: playerId, name: String(name || '神秘貓奴').slice(0, 20), spectator, socketId: socket.id, idle: false, disconnectedAt: null, idleTimer: null, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
+  room.players.set(playerId, player); socket.join(room.code); emitRoom(room); checkAllSpectator(room);
 }
 
 server.listen(PORT, () => console.log(`MeowDoku is ready at http://localhost:${PORT}`));
