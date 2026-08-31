@@ -73,7 +73,7 @@
 .catalog-card.locked-level { opacity: .57; background: #f2eee7; }
 .catalog-card button:disabled { cursor: not-allowed; background: #9d9b96; }
 .person { width: 100%; border: 0; background: transparent; text-align: left; font: inherit; }
-.person.host strong::after { content: none; }
+/*.person.host strong::after { content: none; }*/
 .person:not(:disabled) { cursor: pointer; }
 .person.watching { background: rgba(35, 110, 103, .12); }
 .person.eliminated { color: #b4313d; background: rgba(214, 62, 70, .12); }

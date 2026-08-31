@@ -12,7 +12,19 @@ const anonymousTag = localStorage.meowdokuAnonTag || String(Math.floor(Math.rand
 localStorage.meowdokuAnonTag = anonymousTag;
 nameInput.value = state.name;
 nameInput.addEventListener('input', () => { state.name = nameInput.value.trim(); localStorage.meowdokuName = state.name; });
-const palette = ['#ff5d4a', '#ffb000', '#34c759', '#218cff', '#9656e8', '#ec3e8a', '#81cf27', '#00a6a6', '#ff7a00', '#d84a73'];
+// const palette = ['#ff5d4a', '#ffb000', '#34c759', '#218cff', '#9656e8', '#ec3e8a', '#81cf27', '#00a6a6', '#ff7a00', '#d84a73'];
+const palette = [
+    '#D94F4F',
+    '#D99A00',
+    '#3FA45B',
+    '#3478C5',
+    '#7952B3',
+    '#C04F8A',
+    '#6FA832',
+    '#168F8F',
+    '#D66A16',
+    '#B84D68'
+];
 const api = async (url, options) => {
   const response = await fetch(url, options); const data = await response.json();
   if (!response.ok) throw new Error(data.error || '發生錯誤'); return data;
@@ -105,7 +117,7 @@ function renderRoomPanel(room, me) {
   const replay = room.status === 'finished' && isHost ? '<button class="primary wide" id="restart-room">用原房號再來一局</button>' : '';
   const roleToggle = room.status === 'lobby'
     ? `<button class="role-toggle" id="role-toggle">${me?.spectator ? '加入本局，成為玩家' : '改為觀戰者'}</button>` : '';
-  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.host ? '房主' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; return `<button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.spectator ? '◉' : player.alive ? '♟' : '×'}</span><strong>${escapeHtml(player.name)}${player.id === state.visitorId ? '（你）' : ''}</strong><small class="player-progress">${status}</small></button>`; }).join('')}</div>${roleToggle}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? '<button class="primary wide" id="start-room">開始這局</button>' : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>${replay}` : ''}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; return `<button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.spectator ? '◉' : player.alive ? '♟' : '×'}</span><strong>${escapeHtml(player.name)}${player.id === state.visitorId ? '（你）' : ''}</strong><small class="player-progress">${status}</small></button>`; }).join('')}</div>${roleToggle}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? '<button class="primary wide" id="start-room">開始這局</button>' : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>${replay}` : ''}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
 }
 function bindBoard() {
   const cells = document.querySelectorAll('.cell');
@@ -169,7 +181,9 @@ async function chooseCell(cell) {
     const currentIndex = state.levels.findIndex(level => level.id === state.single.id);
     state.nextSingleId = state.levels[currentIndex + 1]?.id || null; state.singleCompleted = true;
     renderGame('完美！這盒罐罐是你的了。'); document.querySelector('.board').classList.add('locked');
-  } else renderGame('答對了！');
+  } else {
+      renderGame('答對了！');
+  }
   playCatReveal(row, col);
 }
 
@@ -220,7 +234,7 @@ function showFinishNotice(results) {
   const podium = results.length
     ? results.slice(0, 3).map(row => `<li><b>#${row.rank}</b><span>${escapeHtml(row.name)}</span><small>${row.time}s</small></li>`).join('')
     : '<li><span>這局還沒有完成者。</span></li>';
-  notice.innerHTML = `<span class="finish-cat">🎉</span><p class="eyebrow">GAME FINISHED</p><h2>本局結束！</h2><p>快來看看這次誰最快找到貓咪。</p><ol>${podium}</ol><button class="primary" type="button">查看完整排名</button>`;
+  notice.innerHTML = `<span class="finish-cat">🎉</span><p class="eyebrow">GAME FINISHED</p><h2>本局結束！</h2><p>快來看看這次誰最快找到貓咪。</p><ol>${podium}</ol><button class="primary" type="button">我知道了!</button>`;
   notice.querySelector('button').addEventListener('click', () => notice.remove());
   document.body.append(notice);
 }
