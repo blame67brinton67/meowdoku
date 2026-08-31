@@ -285,7 +285,7 @@ socket.on('disconnect', () => {
 socket.on('final-sprint', ({ deadline }) => { playSfx('sprint'); state.room.deadline = deadline; renderGame('第一位完成！60 秒最後衝刺開始。'); });
 socket.on('game-finished', ({ results }) => { window.lastResults = results; renderGame('本局結束！'); showFinishNotice(results); });
 setInterval(() => document.querySelectorAll('[data-deadline]').forEach(node => { node.textContent = remainingSeconds(node.dataset.deadline); }), 250);
-setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { const t = Math.max(0, Math.ceil((Number(node.dataset.countdown) - Date.now()) / 1000)); if (String(t) !== node.textContent) { node.textContent = t; if (t > 0) playSfx('tick'); } }), 100);
+setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { const t = Math.max(0, Math.ceil((Number(node.dataset.countdown) - Date.now()) / 1000)); if (!node.dataset.ticked || String(t) !== node.textContent) { node.dataset.ticked = '1'; node.textContent = t; if (t > 0) playSfx('tick'); } }), 100);
 
 function playCatReveal(row, col) {
   requestAnimationFrame(() => {
