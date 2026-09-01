@@ -20,6 +20,10 @@ const api = async (url, options) => {
   if (!response.ok) throw new Error(data.error || '發生錯誤'); return data;
 };
 const escapeHtml = value => String(value).replace(/[&<>'"]/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' })[char]);
+// A level's rating (difficulty.js) is what orders the ladder, so it is shown
+// wherever a level is: stars for the feel, the technique for what to look for.
+const stars = rating => '★'.repeat(rating.stars) + '☆'.repeat(5 - rating.stars);
+const ratingLine = rating => rating ? `<span class="rating"><b>${stars(rating)}</b>${escapeHtml(rating.hardestName)} · ${rating.score} 分</span>` : '';
 const playerName = () => state.name || `神祕貓奴 #${anonymousTag}`;
 // Practice (upsolve) borrows the whole single-player board, only the scoring
 // and the wrong-click rule differ.
@@ -28,7 +32,8 @@ const matchDate = value => new Date(value).toLocaleString('zh-Hant', { month: 'n
 const outcomeLabel = outcome => outcome.status === 'solved' ? `第 ${outcome.rank} 名 · ${outcome.time}s` : outcome.status === 'eliminated' ? '被淘汰' : '時間到未完成';
 
 document.querySelector('#home-button').addEventListener('click', home);
-document.querySelector('#admin-button').addEventListener('click', () => document.querySelector('#admin-dialog').showModal());
+document.querySelector('#admin-button').addEventListener('click', () => { document.querySelector('#admin-message').textContent = ''; document.querySelector('#admin-dialog').showModal(); });
+document.querySelector('#admin-dialog .close').addEventListener('click', () => document.querySelector('#admin-dialog').close());
 // Right-click is reserved for puzzle annotation, not the browser context menu.
 document.addEventListener('contextmenu', event => event.preventDefault());
 document.querySelector('#admin-form').addEventListener('submit', async event => {
@@ -36,7 +41,7 @@ document.querySelector('#admin-form').addEventListener('submit', async event => 
   button.disabled = true; message.textContent = '正在確認唯一解…';
   try {
     const level = await api('/api/admin/levels', { method: 'POST', headers: { 'content-type': 'application/json', 'x-admin-key': document.querySelector('#admin-key').value }, body: JSON.stringify({ name: document.querySelector('#level-name').value, size: document.querySelector('#level-size').value }) });
-    message.textContent = `已發布「${level.name}」！`; setTimeout(() => document.querySelector('#admin-dialog').close(), 900);
+    message.textContent = `已發布「${level.name}」！${level.rating ? ` 難度 ${stars(level.rating)}（${level.rating.hardestName}，${level.rating.score} 分）` : ''}`; setTimeout(() => document.querySelector('#admin-dialog').close(), 900);
   } catch (error) { message.textContent = error.message; } finally { button.disabled = false; }
 });
 
@@ -45,26 +50,28 @@ async function home() {
   const [levels, leaderboard, progress] = await Promise.all([api('/api/levels'), api('/api/leaderboard'), api(`/api/progress/${state.visitorId}`)]);
   state.levels = levels; state.cleared = new Set(progress.cleared);
   const nextIndex = levels.findIndex(level => !state.cleared.has(level.id));
-  const nextLevel = levels[nextIndex === -1 ? levels.length - 1 : nextIndex];
-  const continueLabel = nextIndex === -1 ? '全部通關！再玩一次' : `第 ${String(nextIndex + 1).padStart(3, '0')} 關`;
+  const nextLevel = levels[nextIndex === -1 ? levels.length - 1 : nextIndex] || null;
+  const continueLabel = !nextLevel ? '關卡正在準備' : nextIndex === -1 ? '全部通關！再玩一次' : `第 ${String(nextIndex + 1).padStart(3, '0')} 關`;
   view.innerHTML = `
     <section class="hero"><div><p class="eyebrow">A LITTLE LOGIC GAME</p><h1>幫每隻貓咪<br><em>找到牠的地盤</em></h1><p>每行、每列與每個色塊都只能住一隻貓。不要點錯，貓咪的尊嚴很脆弱。</p></div><div class="hero-cat" aria-hidden="true">=^･ω･^=</div></section>
     <section class="mode-grid"><article class="mode-card solo"><span class="mode-icon">⌁</span><p class="eyebrow">SOLO MODE</p><h2>獨自推理</h2><p>挑一個關卡，慢慢找到唯一的答案。</p><button class="primary" id="open-solo">選擇關卡</button></article>
     <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><button class="dark-button" id="open-multi">進入多人遊戲</button><button class="link-button" id="open-history">對戰紀錄（重新解題）</button></article></section>
-    <section class="lower-grid"><article class="panel continue-panel"><div><p class="eyebrow">SINGLE PLAYER</p><h2>接著挑戰</h2><p>${nextIndex === -1 ? '所有罐罐都找到了，真是傳奇貓奴。' : '解完前一關，下一盒罐罐正在等你。'}</p></div><div class="continue-level"><span>${continueLabel}</span><strong>${escapeHtml(nextLevel.name)}</strong><small>${nextLevel.size} × ${nextLevel.size}</small></div><button class="primary" id="continue-solo" data-level="${nextLevel.id}">${nextIndex === -1 ? '再次挑戰 →' : '繼續解題 →'}</button><button class="link-button" id="open-solo-2">查看全部關卡</button></article>
+    <section class="lower-grid"><article class="panel continue-panel"><div><p class="eyebrow">SINGLE PLAYER</p><h2>接著挑戰</h2><p>${!nextLevel ? '難度階梯正在產生，稍等幾秒再回來。' : nextIndex === -1 ? '所有罐罐都找到了，真是傳奇貓奴。' : '解完前一關，下一盒罐罐正在等你。'}</p></div><div class="continue-level"><span>${continueLabel}</span><strong>${nextLevel ? escapeHtml(nextLevel.name) : '尚未有關卡'}</strong><small>${nextLevel ? `${nextLevel.size} × ${nextLevel.size}` : '貓咪還在畫地圖'}</small>${nextLevel ? ratingLine(nextLevel.rating) : ''}</div><button class="primary" id="continue-solo" ${nextLevel ? '' : 'disabled'}>${nextIndex === -1 ? '再次挑戰 →' : '繼續解題 →'}</button><button class="link-button" id="open-solo-2">查看全部關卡</button></article>
     <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.length ? `<ol>${leaderboard.slice(0, 5).map((entry, i) => `<li><span>${i + 1}</span><strong>${escapeHtml(entry.name)}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}</article></section>`;
   document.querySelector('#open-solo').onclick = showLevels; document.querySelector('#open-solo-2').onclick = showLevels;
   document.querySelector('#open-multi').onclick = showMultiplayer;
   document.querySelector('#open-history').onclick = showHistory;
-  document.querySelector('#continue-solo').onclick = () => startSingle(nextLevel.id);
+  if (nextLevel) document.querySelector('#continue-solo').onclick = () => startSingle(nextLevel.id);
 }
 async function showLevels() {
   const [levels, progress] = await Promise.all([api('/api/levels'), api(`/api/progress/${state.visitorId}`)]);
   state.levels = levels; state.cleared = new Set(progress.cleared); state.mode = 'levels';
   const clearedCount = levels.filter(level => state.cleared.has(level.id)).length;
-  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">SOLO MODE</p><h1>一步一腳印解鎖</h1><p>已通過 <b>${clearedCount}</b> / ${levels.length} 關。完成前一關才能打開下一盒罐罐。</p></section><section class="level-catalog">${levels.map((level, index) => {
-    const cleared = state.cleared.has(level.id), unlocked = index === 0 || state.cleared.has(levels[index - 1].id);
-    return `<article class="catalog-card ${cleared ? 'cleared' : ''} ${unlocked ? '' : 'locked-level'}"><span>LEVEL ${String(index + 1).padStart(3, '0')}</span><h2>${escapeHtml(level.name)}</h2><p>${level.size} × ${level.size}，${level.size} 隻貓咪</p><button class="primary" ${unlocked ? `data-level="${level.id}"` : 'disabled'}>${cleared ? '✓ 已通過，再玩一次' : unlocked ? '開始推理' : '🔒 尚未解鎖'}</button></article>`;
+  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">SOLO MODE</p><h1>一步一腳印解鎖</h1><p>已通過 <b>${clearedCount}</b> / ${levels.length} 關。關卡依難度排序，完成前一關才能打開下一盒罐罐。</p></section>${levels.length ? '' : '<section class="panel"><p class="empty">難度階梯正在產生，稍等幾秒再重新整理。</p></section>'}<section class="level-catalog">${levels.map((level, index) => {
+    // A level already cleared stays replayable even when a newly rated level
+    // sorts in front of it and pushes an uncleared board in between.
+    const cleared = state.cleared.has(level.id), unlocked = cleared || index === 0 || state.cleared.has(levels[index - 1].id);
+    return `<article class="catalog-card ${cleared ? 'cleared' : ''} ${unlocked ? '' : 'locked-level'}"><span>LEVEL ${String(index + 1).padStart(3, '0')}</span><h2>${escapeHtml(level.name)}</h2><p>${level.size} × ${level.size}，${level.size} 隻貓咪</p>${ratingLine(level.rating)}<button class="primary" ${unlocked ? `data-level="${level.id}"` : 'disabled'}>${cleared ? '✓ 已通過，再玩一次' : unlocked ? '開始推理' : '🔒 尚未解鎖'}</button></article>`;
   }).join('')}</section>`;
   document.querySelector('#back').onclick = home; document.querySelectorAll('[data-level]').forEach(button => button.onclick = () => startSingle(button.dataset.level));
 }
@@ -112,7 +119,7 @@ function renderGame(message = '') {
     return;
   }
   renderedLayout = layout;
-  view.innerHTML = `<section class="game-layout"><div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div>${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div></div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${footer}${nextAction}</div>${state.mode === 'multi' ? renderRoomPanel(room, me) : `<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>${state.mode === 'practice' ? '練習模式：點錯不會結束' : '點錯一格，挑戰失敗'}</li></ul></aside>`}</section>`;
+  view.innerHTML = `<section class="game-layout"><div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div>${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>${ratingLine(puzzle.rating)}` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div></div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${footer}${nextAction}</div>${state.mode === 'multi' ? `<div class="side-panels">${renderRoomPanel(room, me)}${renderChatPanel()}</div>` : `<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>${state.mode === 'practice' ? '練習模式：點錯不會結束' : '點錯一格，挑戰失敗'}</li></ul></aside>`}</section>`;
   document.querySelector('#quit').onclick = state.mode === 'practice' ? showHistory : state.mode === 'single' ? showLevels : leaveRoom;
   document.querySelector('#next-level')?.addEventListener('click', () => state.nextSingleId ? startSingle(state.nextSingleId) : showLevels());
   bindPracticeButtons();

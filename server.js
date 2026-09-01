@@ -6,6 +6,8 @@ const fs = require('fs');
 const path = require('path');
 const { generatePuzzle, countSolutions, clampSize } = require('./puzzle');
 const { clampSprintSeconds, clampSprintFactor, normalizeSprintMode, resolveSprintSeconds } = require('./sprint');
+const { rate } = require('./difficulty');
+const { buildLadder, validLadder, LADDER_VERSION, LADDER_LENGTH } = require('./ladder');
 
 const app = express();
 const server = http.createServer(app);
@@ -24,6 +26,7 @@ const HISTORY_PATH = path.join(DATA_DIR, 'match-history.json');
 // id and never used to build a path.
 const VISITOR_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const HISTORY_PER_VISITOR = 50, HISTORY_VISITORS = 200;
+const LADDER_PATH = path.join(DATA_DIR, 'ladder.json');
 const rooms = new Map();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -41,26 +44,43 @@ function writeJson(file, value) {
 }
 function loadLevels() {
   const levels = readJson(LEVELS_PATH, []);
-  if (levels.length) {
-    // Existing boards from before the no-touching rule are transparently
-    // regenerated, while their names and identifiers stay stable.
-    const upgraded = levels.map(level => {
-      if (level.name === '新手的第一盒罐罐' && level.size < 7) return { ...level, ...generatePuzzle(7), createdAt: Date.now() };
-      if (countSolutions(level.regions, level.size) === 1) return level;
-      return { ...level, ...generatePuzzle(level.size), createdAt: Date.now() };
-    });
-    if (upgraded.some((level, index) => level !== levels[index])) writeJson(LEVELS_PATH, upgraded);
-    return upgraded;
-  }
-  const starter = { id: nanoid(8), name: '新手的第一盒罐罐', createdAt: Date.now(), ...generatePuzzle(7) };
-  writeJson(LEVELS_PATH, [starter]);
-  return [starter];
+  // Existing boards from before the no-touching rule are transparently
+  // regenerated, while their names and identifiers stay stable. The ladder
+  // supplies the starter levels now, so an empty file is a normal state.
+  const upgraded = levels.map(level => {
+    if (level.name === '新手的第一盒罐罐' && level.size < 7) return { ...level, ...generatePuzzle(7), createdAt: Date.now(), rating: null };
+    if (countSolutions(level.regions, level.size) === 1) return level;
+    return { ...level, ...generatePuzzle(level.size), createdAt: Date.now(), rating: null };
+  }).map(level => level.rating ? level : { ...level, rating: rate(level) });
+  if (upgraded.some((level, index) => level !== levels[index])) writeJson(LEVELS_PATH, upgraded);
+  return upgraded;
 }
 let levels = loadLevels();
+const ladder = validLadder(readJson(LADDER_PATH, null));
+let ladderBuilding = false;
+// The ladder is generate-and-filter over thousands of candidates, so it is
+// built once, in the background, and persisted after every accepted rung.
+function startLadder() {
+  if (ladderBuilding || ladder.length >= LADDER_LENGTH) return;
+  ladderBuilding = true;
+  buildLadder({
+    levels: ladder, generate: generatePuzzle, makeId: () => nanoid(8),
+    // A 10 × 10 candidate costs ~150ms of event loop, which nobody may pay in
+    // the middle of a race, so the builder stands aside while a room is live.
+    paused: () => [...rooms.values()].some(room => room.status === 'countdown' || room.status === 'playing'),
+    onAccepted: () => writeJson(LADDER_PATH, { version: LADDER_VERSION, levels: ladder }),
+    onDone: () => { ladderBuilding = false; console.log(`單人階梯完成 ${ladder.length} 關`); }
+  });
+}
+// Ordered by rating, so an easy 9 × 9 may sit before a nasty 7 × 7, and admin
+// levels take their place in the same order instead of trailing the ladder.
+function singleLevels() {
+  return [...ladder, ...levels].sort((a, b) => (a.rating?.score || 0) - (b.rating?.score || 0) || a.createdAt - b.createdAt);
+}
 let multiplayerPuzzlePool = readJson(PUZZLE_POOL_PATH, []);
 const refillingPoolSizes = new Set();
 const MULTIPLAYER_POOL_PER_SIZE = 4;
-function publicLevel(level) { return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt }; }
+function publicLevel(level) { return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt, rating: level.rating || null }; }
 // One puzzle per tick: the pool is refilled without holding up the socket
 // traffic of a match that is already running.
 function refillMultiplayerPool(size) {
@@ -97,9 +117,9 @@ function scoreRows() {
     .map(({ name, cleared }) => ({ name, cleared: cleared.length }));
 }
 
-app.get('/api/levels', (_req, res) => res.json(levels.map(publicLevel)));
+app.get('/api/levels', (_req, res) => res.json(singleLevels().map(publicLevel)));
 app.get('/api/levels/:id', (req, res) => {
-  const level = levels.find(item => item.id === req.params.id);
+  const level = singleLevels().find(item => item.id === req.params.id);
   if (!level) return res.status(404).json({ error: '找不到關卡' });
   res.json(level); // Single-player boards need the local answer for instant feedback.
 });
@@ -126,12 +146,15 @@ app.get('/api/history/:visitorId', (req, res) => {
 });
 app.post('/api/single-complete', (req, res) => {
   const { visitorId, name, levelId } = req.body || {};
-  const levelIndex = levels.findIndex(level => level.id === levelId);
+  const list = singleLevels();
+  const levelIndex = list.findIndex(level => level.id === levelId);
   if (!visitorId || !name || levelIndex < 0) return res.status(400).json({ error: '資料不完整' });
   const scores = readJson(SCORES_PATH, {});
   const entry = scores[visitorId] || { name: String(name).slice(0, 20), cleared: [] };
   entry.name = String(name).slice(0, 20);
-  if (levelIndex > 0 && !entry.cleared.includes(levels[levelIndex - 1].id)) return res.status(403).json({ error: '請先完成前一關' });
+  // Replaying something already cleared stays allowed even when a newly rated
+  // level has since sorted in between it and the rung below.
+  if (levelIndex > 0 && !entry.cleared.includes(levelId) && !entry.cleared.includes(list[levelIndex - 1].id)) return res.status(403).json({ error: '請先完成前一關' });
   if (!entry.cleared.includes(levelId)) entry.cleared.push(levelId);
   scores[visitorId] = entry;
   writeJson(SCORES_PATH, scores);
@@ -141,7 +164,7 @@ app.post('/api/admin/levels', (req, res) => {
   if (req.header('x-admin-key') !== ADMIN_KEY) return res.status(401).json({ error: '管理密鑰不正確' });
   try {
     const puzzle = generatePuzzle(req.body?.size);
-    const level = { id: nanoid(8), name: String(req.body?.name || `${puzzle.size} × ${puzzle.size} 新關卡`).slice(0, 40), createdAt: Date.now(), ...puzzle };
+    const level = { id: nanoid(8), name: String(req.body?.name || `${puzzle.size} × ${puzzle.size} 新關卡`).slice(0, 40), createdAt: Date.now(), ...puzzle, rating: rate(puzzle) };
     levels = [...levels, level]; writeJson(LEVELS_PATH, levels);
     res.status(201).json(publicLevel(level));
   } catch (error) { res.status(500).json({ error: error.message }); }
@@ -248,7 +271,7 @@ function allPlayersResolved(room) {
 
 io.on('connection', socket => {
   socket.on('create-room', ({ name, playerId, roomName, levelId, size, visibility, sprintMode, sprintSeconds, sprintFactor }, callback) => {
-    const puzzle = levelId ? levels.find(level => level.id === levelId) : takeMultiplayerPuzzle(size || 7);
+    const puzzle = levelId ? singleLevels().find(level => level.id === levelId) : takeMultiplayerPuzzle(size || 7);
     if (!puzzle) return callback({ error: '找不到關卡' });
     const code = nanoid(5).toUpperCase();
     const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId,
@@ -399,4 +422,4 @@ function joinRoom(socket, room, { name, playerId, spectator }) {
   room.players.set(playerId, player); socket.join(room.code); socket.emit('chat-backlog', room.chat); emitRoom(room); checkAllSpectator(room);
 }
 
-server.listen(PORT, () => console.log(`MeowDoku is ready at http://localhost:${PORT}`));
+server.listen(PORT, () => { console.log(`MeowDoku is ready at http://localhost:${PORT}`); startLadder(); });
