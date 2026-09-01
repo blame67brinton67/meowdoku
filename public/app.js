@@ -265,6 +265,7 @@ function sendChat() {
     if (input.value.trim() === text) input.value = '';
   });
 }
+// Keep in sync with formatBoardText in puzzle.js.
 function formatPuzzleText(puzzle) {
   const rows = [];
   for (let row = 0; row < puzzle.size; row++) rows.push(puzzle.regions.slice(row * puzzle.size, (row + 1) * puzzle.size).map(region => region + 1).join(' '));

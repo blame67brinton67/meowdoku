@@ -266,6 +266,7 @@ function parseBoardText(text) {
   if (solutions > 1) throw new Error('地圖不唯一，存在兩組以上可行答案。');
   return { size, regions, solution };
 }
+// Keep in sync with formatPuzzleText in public/app.js.
 function formatBoardText(puzzle) {
   const rows = [];
   for (let row = 0; row < puzzle.size; row++) rows.push(puzzle.regions.slice(row * puzzle.size, (row + 1) * puzzle.size).map(region => region + 1).join(' '));

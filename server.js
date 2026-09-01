@@ -29,7 +29,6 @@ const VISITOR_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const HISTORY_PER_VISITOR = 50, HISTORY_VISITORS = 200;
 const LADDER_PATH = path.join(DATA_DIR, 'ladder.json');
 const rooms = new Map();
-const revealedPuzzles = new WeakSet();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 app.use(express.json({ limit: '1mb' }));
@@ -82,9 +81,9 @@ let multiplayerPuzzlePool = readJson(PUZZLE_POOL_PATH, []);
 const refillingPoolSizes = new Set();
 const MULTIPLAYER_POOL_PER_SIZE = 4;
 function publicLevel(level) {
-  const result = { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt, rating: level.rating || null };
-  if (revealedPuzzles.has(level)) result.solution = level.solution;
-  return result;
+  const rating = level.rating ? { ...level.rating } : null;
+  if (rating) delete rating.solution;
+  return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt, rating };
 }
 // One puzzle per tick: the pool is refilled without holding up the socket
 // traffic of a match that is already running.
@@ -203,7 +202,7 @@ function compactRoom(room) {
     code: room.code, name: room.name, status: room.status, hostId: room.hostId, visibility: room.visibility,
     // Do not reveal the region arrangement to waiting players or spectators.
     puzzle: room.status === 'playing' || room.status === 'finished'
-      ? publicLevel(room.puzzle)
+      ? { ...publicLevel(room.puzzle), ...(room.status === 'finished' ? { solution: room.puzzle.solution } : {}) }
       : { id: room.puzzle.id, name: room.puzzle.name, size: room.puzzle.size },
     countdownEnds: room.countdownEnds, deadline: room.deadline, sprintMode: room.sprintMode, sprintSeconds: room.sprintSeconds, sprintFactor: room.sprintFactor,
     leaderboard: leaderboardRows(room),
@@ -289,7 +288,7 @@ function recordMatchHistory(room) {
 }
 function finishRoom(room) {
   if (room.status !== 'playing') return;
-  room.status = 'finished'; clearTimeout(room.timer); revealedPuzzles.add(room.puzzle);
+  room.status = 'finished'; clearTimeout(room.timer);
   try { recordMatchHistory(room); } catch (error) { console.error('寫入對戰紀錄失敗', error); }
   emitRoom(room); io.to(room.code).emit('game-finished', { results: orderedResults(room) });
 }
