@@ -5,13 +5,13 @@ const { nanoid } = require('nanoid');
 const fs = require('fs');
 const path = require('path');
 const { generatePuzzle, countSolutions, clampSize } = require('./puzzle');
+const { clampSprintSeconds, clampSprintFactor, normalizeSprintMode, resolveSprintSeconds, SPRINT_DEFAULT, FACTOR_DEFAULT } = require('./sprint');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 const PORT = Number(process.env.PORT || 3000);
 const ADMIN_KEY = process.env.ADMIN_KEY || 'meowdoku-admin';
-const SPRINT_MIN = 15, SPRINT_MAX = 300, SPRINT_DEFAULT = 60;
 const IDLE_GRACE = 20_000;
 const ALL_SPECTATOR_CLOSE = 10 * 60_000;
 const DATA_DIR = path.join(__dirname, 'data');
@@ -19,11 +19,6 @@ const LEVELS_PATH = path.join(DATA_DIR, 'levels.json');
 const SCORES_PATH = path.join(DATA_DIR, 'scores.json');
 const PUZZLE_POOL_PATH = path.join(DATA_DIR, 'multiplayer-puzzle-pool.json');
 const rooms = new Map();
-
-function clampSprintSeconds(value, fallback = SPRINT_DEFAULT) {
-  const seconds = Math.round(Number(value));
-  return Number.isFinite(seconds) ? Math.min(SPRINT_MAX, Math.max(SPRINT_MIN, seconds)) : fallback;
-}
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 app.use(express.json({ limit: '1mb' }));
@@ -143,7 +138,7 @@ function compactRoom(room) {
     puzzle: room.status === 'playing' || room.status === 'finished'
       ? publicLevel(room.puzzle)
       : { id: room.puzzle.id, name: room.puzzle.name, size: room.puzzle.size },
-    countdownEnds: room.countdownEnds, deadline: room.deadline, sprintSeconds: room.sprintSeconds,
+    countdownEnds: room.countdownEnds, deadline: room.deadline, sprintMode: room.sprintMode, sprintSeconds: room.sprintSeconds, sprintFactor: room.sprintFactor,
     players: [...room.players.values()].map(player => ({
       id: player.id, name: player.name, host: player.id === room.hostId, spectator: player.spectator, idle: player.idle, alive: player.alive,
       found: player.found.size, completedAt: player.completedAt,
@@ -208,13 +203,14 @@ function allPlayersResolved(room) {
 }
 
 io.on('connection', socket => {
-  socket.on('create-room', ({ name, playerId, roomName, levelId, size, visibility, sprintSeconds }, callback) => {
+  socket.on('create-room', ({ name, playerId, roomName, levelId, size, visibility, sprintMode, sprintSeconds, sprintFactor }, callback) => {
     const puzzle = levelId ? levels.find(level => level.id === levelId) : takeMultiplayerPuzzle(size || 7);
     if (!puzzle) return callback({ error: '找不到關卡' });
     const code = nanoid(5).toUpperCase();
     const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId,
       visibility: visibility === 'private' ? 'private' : 'public',
-      players: new Map(), startedAt: null, deadline: null, timer: null, spectatorTimer: null, sprintSeconds: clampSprintSeconds(sprintSeconds) };
+      players: new Map(), startedAt: null, deadline: null, timer: null, spectatorTimer: null,
+      sprintMode: normalizeSprintMode(sprintMode, 'fixed'), sprintSeconds: clampSprintSeconds(sprintSeconds), sprintFactor: clampSprintFactor(sprintFactor) };
     rooms.set(code, room); joinRoom(socket, room, { name, playerId, spectator: false }); callback({ code });
   });
   socket.on('join-room', ({ code, name, playerId, spectator }, callback) => {
@@ -252,10 +248,11 @@ io.on('connection', socket => {
       player.completedAt = Date.now();
       if (allPlayersResolved(room)) { finishRoom(room); return; }
       if (!room.deadline) {
-        const sprintMs = room.sprintSeconds * 1000;
+        const sprintSeconds = resolveSprintSeconds(room, Date.now() - room.startedAt);
+        const sprintMs = sprintSeconds * 1000;
         room.deadline = Date.now() + sprintMs;
         room.timer = setTimeout(() => finishRoom(room), sprintMs);
-        io.to(room.code).emit('final-sprint', { deadline: room.deadline, sprintSeconds: room.sprintSeconds });
+        io.to(room.code).emit('final-sprint', { deadline: room.deadline, sprintSeconds });
       }
     }
     emitRoomSoon(room);
@@ -274,12 +271,22 @@ io.on('connection', socket => {
     player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
     emitRoom(room); checkAllSpectator(room); callback?.({ ok: true });
   });
-  socket.on('set-sprint-seconds', ({ code, playerId, seconds }, callback) => {
+  socket.on('set-sprint-setting', ({ code, playerId, mode, value }, callback) => {
     const room = rooms.get(code);
     if (!room || room.hostId !== playerId) return callback?.({ error: '只有房主可以調整最後衝刺時間' });
     if (room.status !== 'lobby') return callback?.({ error: '倒數開始後不能再調整最後衝刺時間' });
-    if (!Number.isFinite(Number(seconds))) return callback?.({ error: '請輸入有效的秒數' });
-    room.sprintSeconds = clampSprintSeconds(seconds, room.sprintSeconds);
+    const nextMode = normalizeSprintMode(mode);
+    if (!nextMode) return callback?.({ error: '最後衝刺模式不正確' });
+    if (nextMode === 'multiply') {
+      const factor = clampSprintFactor(value, null);
+      if (factor === null) return callback?.({ error: '請輸入有效的倍數（0.1 – 9999）' });
+      room.sprintFactor = factor;
+    } else {
+      const seconds = clampSprintSeconds(value, null);
+      if (seconds === null) return callback?.({ error: '請輸入有效的秒數（1 – 9999）' });
+      room.sprintSeconds = seconds;
+    }
+    room.sprintMode = nextMode;
     emitRoom(room); callback?.({ ok: true });
   });
   socket.on('restart-room', ({ code, playerId }, callback) => {
