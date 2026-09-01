@@ -19,6 +19,11 @@ const DATA_DIR = path.join(__dirname, 'data');
 const LEVELS_PATH = path.join(DATA_DIR, 'levels.json');
 const SCORES_PATH = path.join(DATA_DIR, 'scores.json');
 const PUZZLE_POOL_PATH = path.join(DATA_DIR, 'multiplayer-puzzle-pool.json');
+const HISTORY_PATH = path.join(DATA_DIR, 'match-history.json');
+// Records are keyed by the client's visitorId, so it is validated as an opaque
+// id and never used to build a path.
+const VISITOR_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const HISTORY_PER_VISITOR = 50, HISTORY_VISITORS = 200;
 const rooms = new Map();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -28,7 +33,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
-function writeJson(file, value) { fs.writeFileSync(file, JSON.stringify(value, null, 2)); }
+// Temp file + rename: a crash mid-write leaves the previous file intact.
+function writeJson(file, value) {
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(value, null, 2));
+  fs.renameSync(temp, file);
+}
 function loadLevels() {
   const levels = readJson(LEVELS_PATH, []);
   if (levels.length) {
@@ -108,6 +118,11 @@ app.get('/api/progress/:visitorId', (req, res) => {
   const scores = readJson(SCORES_PATH, {});
   const entry = scores[req.params.visitorId];
   res.json({ cleared: entry?.cleared || [] });
+});
+app.get('/api/history/:visitorId', (req, res) => {
+  const visitorId = String(req.params.visitorId || '');
+  if (!VISITOR_ID.test(visitorId)) return res.status(400).json({ error: '無效的玩家識別碼' });
+  res.json(readJson(HISTORY_PATH, {})[visitorId] || []);
 });
 app.post('/api/single-complete', (req, res) => {
   const { visitorId, name, levelId } = req.body || {};
@@ -193,9 +208,37 @@ function orderedResults(room) {
   return [...room.players.values()].filter(p => p.completedAt).sort((a, b) => a.completedAt - b.completedAt)
     .map((p, index) => ({ rank: index + 1, name: p.name, time: ((p.completedAt - room.startedAt) / 1000).toFixed(1) }));
 }
+// One record per racer, once per match, so a lost race can still be worked out
+// afterwards. Both the per-visitor list and the visitor count are capped.
+function recordMatchHistory(room) {
+  const participants = racers(room);
+  if (!participants.length) return;
+  const results = orderedResults(room);
+  const finishers = [...room.players.values()].filter(p => p.completedAt).sort((a, b) => a.completedAt - b.completedAt).map(p => p.id);
+  const shared = { matchId: nanoid(10), code: room.code, roomName: room.name, finishedAt: Date.now(),
+    size: room.puzzle.size, regions: room.puzzle.regions, solution: room.puzzle.solution, results };
+  const history = readJson(HISTORY_PATH, {});
+  for (const player of participants) {
+    if (!VISITOR_ID.test(String(player.id || ''))) continue;
+    const record = { ...shared, outcome: {
+      status: player.completedAt ? 'solved' : player.alive ? 'timeout' : 'eliminated',
+      rank: finishers.indexOf(player.id) + 1 || null,
+      time: player.completedAt ? ((player.completedAt - room.startedAt) / 1000).toFixed(1) : null,
+      cats: player.found.size, wrong: [...player.wrong]
+    } };
+    history[player.id] = [record, ...(history[player.id] || [])].slice(0, HISTORY_PER_VISITOR);
+  }
+  const visitors = Object.keys(history);
+  if (visitors.length > HISTORY_VISITORS) {
+    const keep = visitors.sort((a, b) => (history[b][0]?.finishedAt || 0) - (history[a][0]?.finishedAt || 0)).slice(0, HISTORY_VISITORS);
+    for (const visitorId of visitors) if (!keep.includes(visitorId)) delete history[visitorId];
+  }
+  writeJson(HISTORY_PATH, history);
+}
 function finishRoom(room) {
   if (room.status !== 'playing') return;
   room.status = 'finished'; clearTimeout(room.timer);
+  try { recordMatchHistory(room); } catch (error) { console.error('寫入對戰紀錄失敗', error); }
   emitRoom(room); io.to(room.code).emit('game-finished', { results: orderedResults(room) });
 }
 function allPlayersResolved(room) {
