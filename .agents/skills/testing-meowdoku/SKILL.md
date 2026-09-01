@@ -119,6 +119,31 @@ then run with `MEOW_TEST_DELAY=1200 node server.js`.
   = personal pencil marks. For drag marks, hold the button (`xdotool mousedown 3` … `mouseup 3`)
   and screenshot **while still held** to capture the marks.
 
+## Room chat (房間聊天)
+- Lives in `.side-panels` under the player list in multiplayer only: `#chat-log`, `#chat-input`
+  (textarea, `maxlength=200`), 送出 submit button, `#chat-notice` under the form.
+  Enter sends, Shift+Enter inserts a newline — but the server strips control chars, so a
+  multi-line message arrives flattened into one line with spaces.
+- Server (`chat-message`) trims, caps at 200 chars, rate-limits to 5 msgs / 5 s with a 400 ms
+  minimum gap, and answers a rejection through the ack callback → 「訊息太頻繁，先喝口水吧」 in
+  `#chat-notice`. The notice clears itself after ~1.8 s: screenshot in the *same* tool call that
+  sends the flood, or you will miss it.
+- Rejected sends leave the text in the textarea, so typed follow-ups concatenate (`f2f3f4…`).
+  `ctrl+a` before retyping.
+- To prove the *server* cap rather than the textarea `maxlength`, remove the attribute and set the
+  value from the console, then click 送出 through the UI, and measure the received text with
+  `document.querySelectorAll('#chat-log .chat-line p').at(-1).textContent.length` (expect 200).
+- `chat-backlog` is emitted on join and on `resume-room`. To prove it is server-driven, wipe the
+  client copy first (`state.chat = []; document.querySelector('#chat-log').textContent = '';`)
+  and only then `socket.disconnect(); setTimeout(() => socket.connect(), 1000)` — a bare reconnect
+  would repaint from client state and prove nothing. Note `state` and `socket` are reachable as
+  page globals in the console.
+- Page reload does NOT resume a room (`state.resumeCode` is only set by the disconnect handler),
+  so use the socket disconnect/connect trick instead of F5 for reconnect tests.
+- `browser_console` / `read_dom` attach to the **normal** Chrome window even when the Incognito
+  window is focused. Run DOM assertions in the normal window, or verify the Incognito side from
+  screenshots only.
+
 ## Known cosmetic quirks (verify before reporting as new bugs)
 - A spectator's status line still reads 找到 0 / 7 隻貓咪 rather than a spectating label.
 - After a server restart, an open room screen stays on screen until reloaded.
