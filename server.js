@@ -4,7 +4,7 @@ const { Server } = require('socket.io');
 const { nanoid } = require('nanoid');
 const fs = require('fs');
 const path = require('path');
-const { generatePuzzle, countSolutions, clampSize } = require('./puzzle');
+const { generatePuzzle, countSolutions, clampSize, parseBoardText } = require('./puzzle');
 const { generateAsync } = require('./generator');
 const { clampSprintSeconds, clampSprintFactor, normalizeSprintMode, resolveSprintSeconds } = require('./sprint');
 const { rate } = require('./difficulty');
@@ -29,6 +29,7 @@ const VISITOR_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const HISTORY_PER_VISITOR = 50, HISTORY_VISITORS = 200;
 const LADDER_PATH = path.join(DATA_DIR, 'ladder.json');
 const rooms = new Map();
+const revealedPuzzles = new WeakSet();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 app.use(express.json({ limit: '1mb' }));
@@ -66,8 +67,7 @@ function startLadder() {
   ladderBuilding = true;
   buildLadder({
     levels: ladder, generate: generateAsync, makeId: () => nanoid(8),
-    // A 10 × 10 candidate costs ~150ms of event loop, which nobody may pay in
-    // the middle of a race, so the builder stands aside while a room is live.
+    // The builder still consumes CPU, so it stands aside while a room is live.
     paused: () => [...rooms.values()].some(room => room.status === 'countdown' || room.status === 'playing'),
     onAccepted: () => writeJson(LADDER_PATH, { version: LADDER_VERSION, levels: ladder }),
     onDone: () => { ladderBuilding = false; console.log(`單人階梯完成 ${ladder.length} 關`); }
@@ -81,7 +81,11 @@ function singleLevels() {
 let multiplayerPuzzlePool = readJson(PUZZLE_POOL_PATH, []);
 const refillingPoolSizes = new Set();
 const MULTIPLAYER_POOL_PER_SIZE = 4;
-function publicLevel(level) { return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt, rating: level.rating || null }; }
+function publicLevel(level) {
+  const result = { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt, rating: level.rating || null };
+  if (revealedPuzzles.has(level)) result.solution = level.solution;
+  return result;
+}
 // One puzzle per tick: the pool is refilled without holding up the socket
 // traffic of a match that is already running.
 function refillMultiplayerPool(size) {
@@ -170,7 +174,30 @@ app.post('/api/admin/levels', async (req, res) => {
     res.status(201).json(publicLevel(level));
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
+app.post('/api/admin/levels/import', (req, res) => {
+  if (req.header('x-admin-key') !== ADMIN_KEY) return res.status(401).json({ error: '管理密鑰不正確' });
+  const text = req.body?.text;
+  if (typeof text !== 'string') return res.status(400).json({ error: '地圖文字必須是文字格式。' });
+  if (text.length > 8192) return res.status(400).json({ error: '地圖文字不得超過 8 KB。' });
+  let puzzle;
+  try { puzzle = parseBoardText(text); } catch (error) { return res.status(400).json({ error: error.message }); }
+  const level = { id: nanoid(8), name: String(req.body?.name || `${puzzle.size} × ${puzzle.size} 匯入關卡`).slice(0, 40), createdAt: Date.now(), ...puzzle, rating: rate(puzzle) };
+  levels = [...levels, level]; writeJson(LEVELS_PATH, levels);
+  res.status(201).json(publicLevel(level));
+});
 
+function leaderboardRows(room) {
+  const players = new Map();
+  for (const record of room.leaderboard) {
+    const current = players.get(record.playerId);
+    if (!current) players.set(record.playerId, { playerId: record.playerId, name: record.name, ms: record.ms, round: record.round, wins: record.won ? 1 : 0 });
+    else {
+      current.wins += record.won ? 1 : 0;
+      if (record.ms < current.ms) { current.ms = record.ms; current.round = record.round; current.name = record.name; }
+    }
+  }
+  return [...players.values()].sort((a, b) => a.ms - b.ms || a.playerId.localeCompare(b.playerId)).slice(0, 10);
+}
 function compactRoom(room) {
   return {
     code: room.code, name: room.name, status: room.status, hostId: room.hostId, visibility: room.visibility,
@@ -179,6 +206,7 @@ function compactRoom(room) {
       ? publicLevel(room.puzzle)
       : { id: room.puzzle.id, name: room.puzzle.name, size: room.puzzle.size },
     countdownEnds: room.countdownEnds, deadline: room.deadline, sprintMode: room.sprintMode, sprintSeconds: room.sprintSeconds, sprintFactor: room.sprintFactor,
+    leaderboard: leaderboardRows(room),
     players: [...room.players.values()].map(player => ({
       id: player.id, name: player.name, host: player.id === room.hostId, spectator: player.spectator, idle: player.idle, alive: player.alive,
       found: player.found.size, completedAt: player.completedAt,
@@ -261,7 +289,7 @@ function recordMatchHistory(room) {
 }
 function finishRoom(room) {
   if (room.status !== 'playing') return;
-  room.status = 'finished'; clearTimeout(room.timer);
+  room.status = 'finished'; clearTimeout(room.timer); revealedPuzzles.add(room.puzzle);
   try { recordMatchHistory(room); } catch (error) { console.error('寫入對戰紀錄失敗', error); }
   emitRoom(room); io.to(room.code).emit('game-finished', { results: orderedResults(room) });
 }
@@ -278,7 +306,7 @@ io.on('connection', socket => {
     if (!socket.connected) return callback?.({ error: '建立房間時連線已中斷' });
     if (!puzzle) return callback({ error: '找不到關卡' });
     const code = nanoid(5).toUpperCase();
-    const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId,
+    const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId, round: 1, leaderboard: [],
       visibility: visibility === 'private' ? 'private' : 'public',
       players: new Map(), startedAt: null, deadline: null, timer: null, spectatorTimer: null,
       sprintMode: normalizeSprintMode(sprintMode, 'fixed'), sprintSeconds: clampSprintSeconds(sprintSeconds), sprintFactor: clampSprintFactor(sprintFactor), chat: [] };
@@ -317,6 +345,8 @@ io.on('connection', socket => {
     player.found.add(`${row}:${col}`); socket.emit('guess-result', { row, col, hit: true });
     if (player.found.size === room.puzzle.size) {
       player.completedAt = Date.now();
+      room.leaderboard.push({ playerId: player.id, name: player.name, ms: player.completedAt - room.startedAt, at: player.completedAt, round: room.round, won: !room.leaderboard.some(record => record.round === room.round && record.won) });
+      if (room.leaderboard.length > 200) room.leaderboard.splice(0, room.leaderboard.length - 200);
       if (allPlayersResolved(room)) { finishRoom(room); return; }
       if (!room.deadline) {
         const sprintSeconds = resolveSprintSeconds(room, Date.now() - room.startedAt);
@@ -384,7 +414,7 @@ io.on('connection', socket => {
       const puzzle = await generateAsync(room.puzzle.size);
       if (!socket.connected || rooms.get(code) !== room || room.hostId !== playerId) return callback?.({ error: '房間已關閉或房主已離開' });
       clearTimeout(room.timer); clearTimeout(room.countdownTimer);
-      room.puzzle = puzzle; room.status = 'lobby'; room.startedAt = null; room.deadline = null; room.countdownEnds = null;
+      room.puzzle = puzzle; room.round++; room.status = 'lobby'; room.startedAt = null; room.deadline = null; room.countdownEnds = null;
       for (const player of room.players.values()) {
         player.alive = true; player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
       }

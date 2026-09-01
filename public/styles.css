@@ -6,3 +6,11 @@ dialog { width:min(440px,calc(100% - 30px));border:0;padding:0;background:transp
 /* Rating badge: stars + hardest technique, on level cards, the continue panel
    and the solo board. Wraps rather than stretching a card at phone width. */
 .rating { display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;color:var(--muted);font-size:12px;line-height:1.4; }.rating b { color:var(--orange);font-size:13px;letter-spacing:1px; }.catalog-card .rating { margin:-4px 0 2px; }.continue-level .rating { margin-top:2px; }.game-top .rating { margin-top:4px; }
+.board-wrap { background:linear-gradient(160deg, color-mix(in srgb, var(--paper) 92%, white), color-mix(in srgb, var(--paper) 78%, black)); }
+.map-copy-message,.map-copy-hint { display:block; margin-top:6px; color:var(--muted); font-size:11px; }
+.room-leaderboard { margin-top:18px; padding-top:14px; border-top:1px solid var(--line); }
+.room-leaderboard h3 { margin:0 0 8px; font:700 20px Fredoka,sans-serif; }
+.room-leaderboard ol { margin:0; padding:0; list-style:none; }
+.room-leaderboard li { display:flex; justify-content:space-between; gap:8px; padding:7px 0; border-bottom:1px solid rgba(32,34,42,.1); font-size:12px; }
+.room-leaderboard li:last-child { border-bottom:0; }
+.room-leaderboard li span { color:var(--muted); text-align:right; }
