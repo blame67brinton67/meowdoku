@@ -4,7 +4,7 @@ const socket = io();
 const state = {
   visitorId: localStorage.visitorId || crypto.randomUUID(),
   name: localStorage.meowdokuName || '',
-  mode: 'home', single: null, room: null, marks: new Set(), cats: new Set(), pending: new Set(), dragged: false, dragMarking: false,
+  mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), dragged: false, dragMarking: false,
   touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: ''
 };
 localStorage.visitorId = state.visitorId;
@@ -21,6 +21,11 @@ const api = async (url, options) => {
 };
 const escapeHtml = value => String(value).replace(/[&<>'"]/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' })[char]);
 const playerName = () => state.name || `神祕貓奴 #${anonymousTag}`;
+// Practice (upsolve) borrows the whole single-player board, only the scoring
+// and the wrong-click rule differ.
+const soloMode = () => state.mode === 'single' || state.mode === 'practice';
+const matchDate = value => new Date(value).toLocaleString('zh-Hant', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+const outcomeLabel = outcome => outcome.status === 'solved' ? `第 ${outcome.rank} 名 · ${outcome.time}s` : outcome.status === 'eliminated' ? '被淘汰' : '時間到未完成';
 
 document.querySelector('#home-button').addEventListener('click', home);
 document.querySelector('#admin-button').addEventListener('click', () => document.querySelector('#admin-dialog').showModal());
@@ -36,7 +41,7 @@ document.querySelector('#admin-form').addEventListener('submit', async event => 
 });
 
 async function home() {
-  state.mode = 'home'; state.single = null; state.room = null; state.cats.clear(); state.marks.clear();
+  state.mode = 'home'; state.single = null; state.room = null; state.practice = null; state.cats.clear(); state.marks.clear();
   const [levels, leaderboard, progress] = await Promise.all([api('/api/levels'), api('/api/leaderboard'), api(`/api/progress/${state.visitorId}`)]);
   state.levels = levels; state.cleared = new Set(progress.cleared);
   const nextIndex = levels.findIndex(level => !state.cleared.has(level.id));
@@ -45,11 +50,12 @@ async function home() {
   view.innerHTML = `
     <section class="hero"><div><p class="eyebrow">A LITTLE LOGIC GAME</p><h1>幫每隻貓咪<br><em>找到牠的地盤</em></h1><p>每行、每列與每個色塊都只能住一隻貓。不要點錯，貓咪的尊嚴很脆弱。</p></div><div class="hero-cat" aria-hidden="true">=^･ω･^=</div></section>
     <section class="mode-grid"><article class="mode-card solo"><span class="mode-icon">⌁</span><p class="eyebrow">SOLO MODE</p><h2>獨自推理</h2><p>挑一個關卡，慢慢找到唯一的答案。</p><button class="primary" id="open-solo">選擇關卡</button></article>
-    <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><button class="dark-button" id="open-multi">進入多人遊戲</button></article></section>
+    <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><button class="dark-button" id="open-multi">進入多人遊戲</button><button class="link-button" id="open-history">對戰紀錄（重新解題）</button></article></section>
     <section class="lower-grid"><article class="panel continue-panel"><div><p class="eyebrow">SINGLE PLAYER</p><h2>接著挑戰</h2><p>${nextIndex === -1 ? '所有罐罐都找到了，真是傳奇貓奴。' : '解完前一關，下一盒罐罐正在等你。'}</p></div><div class="continue-level"><span>${continueLabel}</span><strong>${escapeHtml(nextLevel.name)}</strong><small>${nextLevel.size} × ${nextLevel.size}</small></div><button class="primary" id="continue-solo" data-level="${nextLevel.id}">${nextIndex === -1 ? '再次挑戰 →' : '繼續解題 →'}</button><button class="link-button" id="open-solo-2">查看全部關卡</button></article>
     <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.length ? `<ol>${leaderboard.slice(0, 5).map((entry, i) => `<li><span>${i + 1}</span><strong>${escapeHtml(entry.name)}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}</article></section>`;
   document.querySelector('#open-solo').onclick = showLevels; document.querySelector('#open-solo-2').onclick = showLevels;
   document.querySelector('#open-multi').onclick = showMultiplayer;
+  document.querySelector('#open-history').onclick = showHistory;
   document.querySelector('#continue-solo').onclick = () => startSingle(nextLevel.id);
 }
 async function showLevels() {
@@ -66,8 +72,21 @@ async function startSingle(id) {
   if (!state.levels.length) state.levels = await api('/api/levels');
   state.single = await api(`/api/levels/${id}`); state.mode = 'single'; state.singleCompleted = false; state.nextSingleId = null; resetBoard(); renderGame();
 }
+async function showHistory() {
+  const records = await api(`/api/history/${state.visitorId}`);
+  state.mode = 'history'; state.room = null; state.practice = null;
+  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MATCH HISTORY</p><h1>對戰紀錄</h1><p>點選任一場對戰，重新打開那張地圖慢慢解。練習不計入單人進度與排行榜。</p></section><section class="level-catalog">${records.length ? records.map(record => `<article class="catalog-card"><span>${escapeHtml(matchDate(record.finishedAt))} · ROOM ${escapeHtml(record.code)}</span><h2>${escapeHtml(record.roomName)}</h2><p>${record.size} × ${record.size}，你：${escapeHtml(outcomeLabel(record.outcome))}；冠軍：${record.results[0] ? `${escapeHtml(record.results[0].name)} ${record.results[0].time}s` : '無人完成'}</p><button class="primary" data-match="${escapeHtml(record.matchId)}">重新解這張圖</button></article>`).join('') : '<p class="empty">還沒有對戰紀錄。去多人房間跑一場，這裡就會留下地圖。</p>'}</section>`;
+  document.querySelector('#back').onclick = home;
+  document.querySelectorAll('[data-match]').forEach(button => button.onclick = () => startPractice(records.find(record => record.matchId === button.dataset.match)));
+}
+function startPractice(record) {
+  if (!record) return;
+  state.practice = record; state.mode = 'practice'; state.singleCompleted = false; state.practiceMs = null; state.practiceStartedAt = Date.now();
+  state.single = { id: record.matchId, name: record.roomName, size: record.size, regions: record.regions, solution: record.solution };
+  resetBoard(); renderGame();
+}
 function resetBoard() { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.dragged = false; }
-function currentPuzzle() { return state.mode === 'single' ? state.single : state.room?.puzzle; }
+function currentPuzzle() { return soloMode() ? state.single : state.room?.puzzle; }
 // Re-creating the whole view costs a full board rebuild plus a fresh set of
 // listeners on every cell. In a room that happens on every broadcast, which is
 // why a click used to feel sticky, so anything that leaves the page structure
@@ -80,26 +99,45 @@ function renderGame(message = '') {
   // they can switch to any remaining player's live board.
   const isViewing = Boolean(isSpectator || me?.alive === false || me?.completedAt);
   const waitingForRoom = state.mode === 'multi' && (room.status === 'lobby' || room.status === 'countdown');
-  const footer = state.mode === 'single'
-    ? `<p class="hint">左鍵放置貓咪；右鍵標記叉叉。右鍵拖曳可以快速標記。</p>`
+  const footer = soloMode()
+    ? `<p class="hint">左鍵放置貓咪；右鍵標記叉叉。右鍵拖曳可以快速標記。${state.mode === 'practice' ? '這是練習，點錯不會結束，繼續推理就好。' : ''}</p>`
     : `<p class="hint">${room.status === 'countdown' ? '準備好了嗎？所有玩家會同時開局。' : waitingForRoom ? '房主按下開始前，地圖會保持保密。' : isViewing ? '點選右側玩家名稱，即可查看他的即時棋盤與標記。' : '左鍵確認貓咪，點錯就淘汰；右鍵僅作個人筆記。'}</p>`;
   const boardArea = waitingForRoom
     ? `<div class="hidden-map"><span>${room.status === 'countdown' ? '<b data-countdown="' + room.countdownEnds + '">3</b>' : '♟'}</span><h2>${room.status === 'countdown' ? '即將開始！' : '地圖已封印'}</h2><p>${room.status === 'countdown' ? '倒數結束後，題目會同時揭曉。' : '房主開始遊戲後，所有人會同時看到題目。'}</p></div>`
     : `<div class="board-wrap">${renderBoard(puzzle, Boolean(isViewing || state.connectionLost || (state.mode === 'multi' && room.status !== 'playing')), viewedBoard(me, isViewing))}</div>`;
-  const nextAction = state.mode === 'single' && state.singleCompleted ? `<div class="next-action">${state.nextSingleId ? '<button class="primary" id="next-level">前往下一關 →</button>' : '<button class="primary" id="next-level">回到關卡列表</button>'}</div>` : '';
+  const nextAction = state.mode === 'practice' ? practiceAction() : state.mode === 'single' && state.singleCompleted ? `<div class="next-action">${state.nextSingleId ? '<button class="primary" id="next-level">前往下一關 →</button>' : '<button class="primary" id="next-level">回到關卡列表</button>'}</div>` : '';
   const layout = [state.mode, room?.code || '', puzzle.id || '', puzzle.size, room?.status || '', waitingForRoom, Boolean(isViewing), state.singleCompleted, state.nextSingleId, state.connectionLost].join('|');
   if (layout === renderedLayout && document.querySelector('.game-layout')) {
     patchGame(puzzle, room, me, isViewing, message);
     return;
   }
   renderedLayout = layout;
-  view.innerHTML = `<section class="game-layout"><div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div>${state.mode === 'single' ? `<p class="eyebrow">SOLO • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div></div><div class="game-status">${state.mode === 'single' ? `<span>找出 <b>${state.cats.size} / ${puzzle.size}</b> 隻貓咪</span>` : gameStatus(room, me)}<span id="game-message">${message}</span></div>${boardArea}${footer}${nextAction}</div>${state.mode === 'multi' ? renderRoomPanel(room, me) : '<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>點錯一格，挑戰失敗</li></ul></aside>'}</section>`;
-  document.querySelector('#quit').onclick = state.mode === 'single' ? showLevels : leaveRoom;
+  view.innerHTML = `<section class="game-layout"><div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div>${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div></div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${footer}${nextAction}</div>${state.mode === 'multi' ? renderRoomPanel(room, me) : `<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>${state.mode === 'practice' ? '練習模式：點錯不會結束' : '點錯一格，挑戰失敗'}</li></ul></aside>`}</section>`;
+  document.querySelector('#quit').onclick = state.mode === 'practice' ? showHistory : state.mode === 'single' ? showLevels : leaveRoom;
   document.querySelector('#next-level')?.addEventListener('click', () => state.nextSingleId ? startSingle(state.nextSingleId) : showLevels());
+  bindPracticeButtons();
   bindBoard(); bindRoomButtons();
 }
+// Practice keeps the live single-player counter and adds its own clock; the
+// match comparison only appears once the board is solved.
+function statusBar(puzzle, room, me) {
+  if (!soloMode()) return gameStatus(room, me);
+  const clock = state.mode === 'practice' ? `<span class="sprint">練習用時 <b data-practice="${state.practiceStartedAt}">${((state.practiceMs ?? (Date.now() - state.practiceStartedAt)) / 1000).toFixed(1)}</b>s</span>` : '';
+  return `<span>找出 <b>${state.cats.size} / ${puzzle.size}</b> 隻貓咪</span>${clock}`;
+}
+function practiceAction() {
+  if (!state.singleCompleted) return '';
+  const { outcome, results } = state.practice;
+  const winner = results[0] ? `冠軍 ${escapeHtml(results[0].name)} ${results[0].time}s` : '本局沒有完成者';
+  const mine = outcome.status === 'solved' ? `當時你以 ${outcome.time}s 拿下第 ${outcome.rank} 名` : outcome.status === 'eliminated' ? `當時你點錯 ${outcome.wrong.length} 格被淘汰，找到 ${outcome.cats} 隻貓` : `當時時間到還沒解完，找到 ${outcome.cats} 隻貓`;
+  return `<div class="next-action practice-compare"><p>練習完成！這次用了 <b>${(state.practiceMs / 1000).toFixed(1)}s</b>。</p><p>${mine}；${winner}。</p><button class="primary" id="practice-again">再練習一次</button><button class="link-button" id="practice-back">回到對戰紀錄</button></div>`;
+}
+function bindPracticeButtons() {
+  document.querySelector('#practice-again')?.addEventListener('click', () => startPractice(state.practice));
+  document.querySelector('#practice-back')?.addEventListener('click', showHistory);
+}
 function patchGame(puzzle, room, me, isViewing, message) {
-  document.querySelector('.game-status').innerHTML = `${state.mode === 'single' ? `<span>找出 <b>${state.cats.size} / ${puzzle.size}</b> 隻貓咪</span>` : gameStatus(room, me)}<span id="game-message">${message}</span>`;
+  document.querySelector('.game-status').innerHTML = `${statusBar(puzzle, room, me)}<span id="game-message">${message}</span>`;
   patchBoard(viewedBoard(me, isViewing));
   if (state.mode !== 'multi') return;
   const panel = document.querySelector('.room-panel'), html = renderRoomPanel(room, me);
@@ -221,8 +259,17 @@ async function chooseCell(cell) {
     return;
   }
   const correct = state.single.solution.some(cat => cat.row === row && cat.col === col);
+  // Practice exists to work the puzzle out, so a wrong cell is only marked.
+  if (!correct && state.mode === 'practice') { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，再想想。'); const board = document.querySelector('.board'); board.classList.add('shake'); setTimeout(() => board.classList.remove('shake'), 500); return; }
   if (!correct) { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
   state.cats.add(key); state.marks.delete(key);
+  if (state.mode === 'practice') {
+    if (state.cats.size === state.single.size) {
+      state.practiceMs = Date.now() - state.practiceStartedAt; state.singleCompleted = true;
+      renderGame('練習完成！'); document.querySelector('.board').classList.add('locked');
+    } else renderGame('答對了！');
+    window.playSfx?.('meow'); playCatReveal(row, col); return;
+  }
   if (state.cats.size === state.single.size) {
     await api('/api/single-complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ visitorId: state.visitorId, name: playerName(), levelId: state.single.id }) });
     state.cleared.add(state.single.id);
@@ -306,6 +353,7 @@ document.addEventListener('visibilitychange', () => {
 socket.on('final-sprint', ({ deadline, sprintSeconds }) => { window.playSfx?.('sprint'); state.room.deadline = deadline; if (sprintSeconds) state.room.sprintSeconds = sprintSeconds; renderGame(`第一位完成！${sprintSeconds || state.room.sprintSeconds} 秒最後衝刺開始。`); });
 socket.on('game-finished', ({ results }) => { window.lastResults = results; renderGame('本局結束！'); showFinishNotice(results); });
 setInterval(() => document.querySelectorAll('[data-deadline]').forEach(node => { const t = remainingSeconds(node.dataset.deadline); const changed = node.dataset.tickAt !== String(t); node.textContent = t; if (changed && t > 0 && t <= 5) window.playSfx?.('tick'); node.dataset.tickAt = t; }), 250);
+setInterval(() => { if (state.mode !== 'practice' || state.practiceMs != null) return; const node = document.querySelector('[data-practice]'); if (node) node.textContent = ((Date.now() - state.practiceStartedAt) / 1000).toFixed(1); }, 100);
 setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { const t = Math.max(0, Math.ceil((Number(node.dataset.countdown) - Date.now()) / 1000)); if (!node.dataset.ticked || String(t) !== node.textContent) { node.dataset.ticked = '1'; node.textContent = t; if (t > 0) window.playSfx?.('tick'); } }), 100);
 
 function playCatReveal(row, col) {
