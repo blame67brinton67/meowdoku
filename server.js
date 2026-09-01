@@ -5,7 +5,7 @@ const { nanoid } = require('nanoid');
 const fs = require('fs');
 const path = require('path');
 const { generatePuzzle, countSolutions, clampSize } = require('./puzzle');
-const { clampSprintSeconds, clampSprintFactor, normalizeSprintMode, resolveSprintSeconds, SPRINT_DEFAULT, FACTOR_DEFAULT } = require('./sprint');
+const { clampSprintSeconds, clampSprintFactor, normalizeSprintMode, resolveSprintSeconds } = require('./sprint');
 
 const app = express();
 const server = http.createServer(app);
