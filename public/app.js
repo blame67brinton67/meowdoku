@@ -4,7 +4,7 @@ const socket = io();
 const state = {
   visitorId: localStorage.visitorId || crypto.randomUUID(),
   name: localStorage.meowdokuName || '',
-  mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), dragged: false, dragMarking: false,
+  mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false,
   touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: ''
 };
 localStorage.visitorId = state.visitorId;
@@ -20,6 +20,10 @@ const api = async (url, options) => {
   if (!response.ok) throw new Error(data.error || '發生錯誤'); return data;
 };
 const escapeHtml = value => String(value).replace(/[&<>'"]/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' })[char]);
+// A level's rating (difficulty.js) is what orders the ladder, so it is shown
+// wherever a level is: stars for the feel, the technique for what to look for.
+const stars = rating => '★'.repeat(rating.stars) + '☆'.repeat(5 - rating.stars);
+const ratingLine = rating => rating ? `<span class="rating"><b>${stars(rating)}</b>${escapeHtml(rating.hardestName)} · ${rating.score} 分</span>` : '';
 const playerName = () => state.name || `神祕貓奴 #${anonymousTag}`;
 // Practice (upsolve) borrows the whole single-player board, only the scoring
 // and the wrong-click rule differ.
@@ -28,7 +32,8 @@ const matchDate = value => new Date(value).toLocaleString('zh-Hant', { month: 'n
 const outcomeLabel = outcome => outcome.status === 'solved' ? `第 ${outcome.rank} 名 · ${outcome.time}s` : outcome.status === 'eliminated' ? '被淘汰' : '時間到未完成';
 
 document.querySelector('#home-button').addEventListener('click', home);
-document.querySelector('#admin-button').addEventListener('click', () => document.querySelector('#admin-dialog').showModal());
+document.querySelector('#admin-button').addEventListener('click', () => { document.querySelector('#admin-message').textContent = ''; document.querySelector('#admin-dialog').showModal(); });
+document.querySelector('#admin-dialog .close').addEventListener('click', () => document.querySelector('#admin-dialog').close());
 // Right-click is reserved for puzzle annotation, not the browser context menu.
 document.addEventListener('contextmenu', event => event.preventDefault());
 document.querySelector('#admin-form').addEventListener('submit', async event => {
@@ -36,7 +41,7 @@ document.querySelector('#admin-form').addEventListener('submit', async event => 
   button.disabled = true; message.textContent = '正在確認唯一解…';
   try {
     const level = await api('/api/admin/levels', { method: 'POST', headers: { 'content-type': 'application/json', 'x-admin-key': document.querySelector('#admin-key').value }, body: JSON.stringify({ name: document.querySelector('#level-name').value, size: document.querySelector('#level-size').value }) });
-    message.textContent = `已發布「${level.name}」！`; setTimeout(() => document.querySelector('#admin-dialog').close(), 900);
+    message.textContent = `已發布「${level.name}」！${level.rating ? ` 難度 ${stars(level.rating)}（${level.rating.hardestName}，${level.rating.score} 分）` : ''}`; setTimeout(() => document.querySelector('#admin-dialog').close(), 900);
   } catch (error) { message.textContent = error.message; } finally { button.disabled = false; }
 });
 
@@ -45,26 +50,28 @@ async function home() {
   const [levels, leaderboard, progress] = await Promise.all([api('/api/levels'), api('/api/leaderboard'), api(`/api/progress/${state.visitorId}`)]);
   state.levels = levels; state.cleared = new Set(progress.cleared);
   const nextIndex = levels.findIndex(level => !state.cleared.has(level.id));
-  const nextLevel = levels[nextIndex === -1 ? levels.length - 1 : nextIndex];
-  const continueLabel = nextIndex === -1 ? '全部通關！再玩一次' : `第 ${String(nextIndex + 1).padStart(3, '0')} 關`;
+  const nextLevel = levels[nextIndex === -1 ? levels.length - 1 : nextIndex] || null;
+  const continueLabel = !nextLevel ? '關卡正在準備' : nextIndex === -1 ? '全部通關！再玩一次' : `第 ${String(nextIndex + 1).padStart(3, '0')} 關`;
   view.innerHTML = `
     <section class="hero"><div><p class="eyebrow">A LITTLE LOGIC GAME</p><h1>幫每隻貓咪<br><em>找到牠的地盤</em></h1><p>每行、每列與每個色塊都只能住一隻貓。不要點錯，貓咪的尊嚴很脆弱。</p></div><div class="hero-cat" aria-hidden="true">=^･ω･^=</div></section>
     <section class="mode-grid"><article class="mode-card solo"><span class="mode-icon">⌁</span><p class="eyebrow">SOLO MODE</p><h2>獨自推理</h2><p>挑一個關卡，慢慢找到唯一的答案。</p><button class="primary" id="open-solo">選擇關卡</button></article>
     <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><button class="dark-button" id="open-multi">進入多人遊戲</button><button class="link-button" id="open-history">對戰紀錄（重新解題）</button></article></section>
-    <section class="lower-grid"><article class="panel continue-panel"><div><p class="eyebrow">SINGLE PLAYER</p><h2>接著挑戰</h2><p>${nextIndex === -1 ? '所有罐罐都找到了，真是傳奇貓奴。' : '解完前一關，下一盒罐罐正在等你。'}</p></div><div class="continue-level"><span>${continueLabel}</span><strong>${escapeHtml(nextLevel.name)}</strong><small>${nextLevel.size} × ${nextLevel.size}</small></div><button class="primary" id="continue-solo" data-level="${nextLevel.id}">${nextIndex === -1 ? '再次挑戰 →' : '繼續解題 →'}</button><button class="link-button" id="open-solo-2">查看全部關卡</button></article>
+    <section class="lower-grid"><article class="panel continue-panel"><div><p class="eyebrow">SINGLE PLAYER</p><h2>接著挑戰</h2><p>${!nextLevel ? '難度階梯正在產生，稍等幾秒再回來。' : nextIndex === -1 ? '所有罐罐都找到了，真是傳奇貓奴。' : '解完前一關，下一盒罐罐正在等你。'}</p></div><div class="continue-level"><span>${continueLabel}</span><strong>${nextLevel ? escapeHtml(nextLevel.name) : '尚未有關卡'}</strong><small>${nextLevel ? `${nextLevel.size} × ${nextLevel.size}` : '貓咪還在畫地圖'}</small>${nextLevel ? ratingLine(nextLevel.rating) : ''}</div><button class="primary" id="continue-solo" ${nextLevel ? '' : 'disabled'}>${nextIndex === -1 ? '再次挑戰 →' : '繼續解題 →'}</button><button class="link-button" id="open-solo-2">查看全部關卡</button></article>
     <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.length ? `<ol>${leaderboard.slice(0, 5).map((entry, i) => `<li><span>${i + 1}</span><strong>${escapeHtml(entry.name)}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}</article></section>`;
   document.querySelector('#open-solo').onclick = showLevels; document.querySelector('#open-solo-2').onclick = showLevels;
   document.querySelector('#open-multi').onclick = showMultiplayer;
   document.querySelector('#open-history').onclick = showHistory;
-  document.querySelector('#continue-solo').onclick = () => startSingle(nextLevel.id);
+  if (nextLevel) document.querySelector('#continue-solo').onclick = () => startSingle(nextLevel.id);
 }
 async function showLevels() {
   const [levels, progress] = await Promise.all([api('/api/levels'), api(`/api/progress/${state.visitorId}`)]);
   state.levels = levels; state.cleared = new Set(progress.cleared); state.mode = 'levels';
   const clearedCount = levels.filter(level => state.cleared.has(level.id)).length;
-  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">SOLO MODE</p><h1>一步一腳印解鎖</h1><p>已通過 <b>${clearedCount}</b> / ${levels.length} 關。完成前一關才能打開下一盒罐罐。</p></section><section class="level-catalog">${levels.map((level, index) => {
-    const cleared = state.cleared.has(level.id), unlocked = index === 0 || state.cleared.has(levels[index - 1].id);
-    return `<article class="catalog-card ${cleared ? 'cleared' : ''} ${unlocked ? '' : 'locked-level'}"><span>LEVEL ${String(index + 1).padStart(3, '0')}</span><h2>${escapeHtml(level.name)}</h2><p>${level.size} × ${level.size}，${level.size} 隻貓咪</p><button class="primary" ${unlocked ? `data-level="${level.id}"` : 'disabled'}>${cleared ? '✓ 已通過，再玩一次' : unlocked ? '開始推理' : '🔒 尚未解鎖'}</button></article>`;
+  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">SOLO MODE</p><h1>一步一腳印解鎖</h1><p>已通過 <b>${clearedCount}</b> / ${levels.length} 關。關卡依難度排序，完成前一關才能打開下一盒罐罐。</p></section>${levels.length ? '' : '<section class="panel"><p class="empty">難度階梯正在產生，稍等幾秒再重新整理。</p></section>'}<section class="level-catalog">${levels.map((level, index) => {
+    // A level already cleared stays replayable even when a newly rated level
+    // sorts in front of it and pushes an uncleared board in between.
+    const cleared = state.cleared.has(level.id), unlocked = cleared || index === 0 || state.cleared.has(levels[index - 1].id);
+    return `<article class="catalog-card ${cleared ? 'cleared' : ''} ${unlocked ? '' : 'locked-level'}"><span>LEVEL ${String(index + 1).padStart(3, '0')}</span><h2>${escapeHtml(level.name)}</h2><p>${level.size} × ${level.size}，${level.size} 隻貓咪</p>${ratingLine(level.rating)}<button class="primary" ${unlocked ? `data-level="${level.id}"` : 'disabled'}>${cleared ? '✓ 已通過，再玩一次' : unlocked ? '開始推理' : '🔒 尚未解鎖'}</button></article>`;
   }).join('')}</section>`;
   document.querySelector('#back').onclick = home; document.querySelectorAll('[data-level]').forEach(button => button.onclick = () => startSingle(button.dataset.level));
 }
@@ -112,11 +119,11 @@ function renderGame(message = '') {
     return;
   }
   renderedLayout = layout;
-  view.innerHTML = `<section class="game-layout"><div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div>${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div></div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${footer}${nextAction}</div>${state.mode === 'multi' ? renderRoomPanel(room, me) : `<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>${state.mode === 'practice' ? '練習模式：點錯不會結束' : '點錯一格，挑戰失敗'}</li></ul></aside>`}</section>`;
+  view.innerHTML = `<section class="game-layout"><div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div>${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>${ratingLine(puzzle.rating)}` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div></div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${footer}${nextAction}</div>${state.mode === 'multi' ? `<div class="side-panels">${renderRoomPanel(room, me)}${renderChatPanel()}</div>` : `<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>${state.mode === 'practice' ? '練習模式：點錯不會結束' : '點錯一格，挑戰失敗'}</li></ul></aside>`}</section>`;
   document.querySelector('#quit').onclick = state.mode === 'practice' ? showHistory : state.mode === 'single' ? showLevels : leaveRoom;
   document.querySelector('#next-level')?.addEventListener('click', () => state.nextSingleId ? startSingle(state.nextSingleId) : showLevels());
   bindPracticeButtons();
-  bindBoard(); bindRoomButtons();
+  bindBoard(); bindRoomButtons(); bindChat();
 }
 // Practice keeps the live single-player counter and adds its own clock; the
 // match comparison only appears once the board is solved.
@@ -141,7 +148,7 @@ function patchGame(puzzle, room, me, isViewing, message) {
   patchBoard(viewedBoard(me, isViewing));
   if (state.mode !== 'multi') return;
   const panel = document.querySelector('.room-panel'), html = renderRoomPanel(room, me);
-  if (panel && panel.outerHTML !== html) { panel.outerHTML = html; bindRoomButtons(); }
+  if (panel && panel.outerHTML !== html) { const sprintFocused = document.activeElement?.id === 'sprint-value'; panel.outerHTML = html; bindRoomButtons(); if (sprintFocused) { const input = document.querySelector('#sprint-value'); input?.focus(); input?.setSelectionRange(input.value.length, input.value.length); } }
 }
 function patchBoard(boardState) {
   for (const cell of document.querySelectorAll('.cell')) {
@@ -178,15 +185,49 @@ function renderRoomPanel(room, me) {
   const replay = room.status === 'finished' && isHost ? '<button class="primary wide" id="restart-room">用原房號再來一局</button>' : '';
   const roleToggle = room.status === 'lobby'
     ? `<button class="role-toggle" id="role-toggle">${me?.spectator ? '加入本局，成為玩家' : '改為觀戰者'}</button>` : '';
-  const sprintSeconds = Number(room.sprintSeconds);
-  const sprintChoices = [30, 60, 90, 120];
-  const sprintOptions = sprintChoices.includes(sprintSeconds) ? sprintChoices : [sprintSeconds, ...sprintChoices];
+  const sprintMode = room.sprintMode === 'multiply' ? 'multiply' : 'fixed';
+  const sprintValue = sprintMode === 'multiply' ? room.sprintFactor : room.sprintSeconds;
   const sprintSetting = room.status === 'lobby'
     ? isHost
-      ? `<label class="sprint-setting">最後衝刺時間<select id="sprint-seconds">${sprintOptions.map(seconds => `<option value="${seconds}" ${seconds === sprintSeconds ? 'selected' : ''}>${seconds} 秒</option>`).join('')}</select></label>`
-      : `<p class="sprint-setting readonly">最後衝刺時間：<b>${room.sprintSeconds} 秒</b></p>`
+      ? `<label class="sprint-setting">最後衝刺時間<select id="sprint-mode"><option value="fixed" ${sprintMode === 'fixed' ? 'selected' : ''}>固定秒數</option><option value="multiply" ${sprintMode === 'multiply' ? 'selected' : ''}>第一名用時 ×</option></select><input id="sprint-value" type="text" inputmode="decimal" maxlength="6" value="${sprintValue}" /><small>${sprintMode === 'multiply' ? '倍數 0.1 – 9999' : '1 – 9999 秒'}</small></label>`
+      : `<p class="sprint-setting readonly">最後衝刺：<b>${sprintMode === 'multiply' ? `第一名用時 × ${room.sprintFactor}` : `${room.sprintSeconds} 秒`}</b></p>`
     : '';
   return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; return `<button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span><strong>${escapeHtml(player.name)}${player.id === state.visitorId ? '（你）' : ''}</strong><small class="player-progress">${status}</small></button>`; }).join('')}</div>${roleToggle}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? '<button class="primary wide" id="start-room">開始這局</button>' : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>${replay}` : ''}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+}
+function renderChatPanel() {
+  return `<aside class="chat-panel"><div><p class="eyebrow">ROOM CHAT</p><h2>房間聊天</h2></div><div class="chat-log" id="chat-log"></div><form class="chat-form" id="chat-form"><textarea id="chat-input" rows="1" maxlength="200" placeholder="跟大家說點什麼…"></textarea><button class="primary" type="submit">送出</button></form><small class="chat-notice" id="chat-notice"></small></aside>`;
+}
+function bindChat() {
+  const form = document.querySelector('#chat-form'), input = document.querySelector('#chat-input'), log = document.querySelector('#chat-log');
+  if (!form) return;
+  log.textContent = ''; state.chat.forEach(appendChatMessage); log.scrollTop = log.scrollHeight;
+  form.onsubmit = event => { event.preventDefault(); sendChat(); };
+  // The board listens on the document, so chat keystrokes stay inside the box.
+  input.onkeydown = event => { event.stopPropagation(); if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendChat(); } };
+}
+function chatNotice(text) {
+  const notice = document.querySelector('#chat-notice'); if (!notice) return;
+  notice.textContent = text; clearTimeout(chatNotice.timer); chatNotice.timer = setTimeout(() => notice.textContent = '', 1800);
+}
+function sendChat() {
+  const input = document.querySelector('#chat-input'), text = input?.value.trim();
+  if (!text || !state.room) return;
+  socket.emit('chat-message', { code: state.room.code, playerId: state.visitorId, text }, result => {
+    if (result?.error) return chatNotice(result.error);
+    if (input.value.trim() === text) input.value = '';
+  });
+}
+// One DOM node per message: chatter never triggers a board re-render.
+function appendChatMessage(message) {
+  const log = document.querySelector('#chat-log'); if (!log) return;
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 8;
+  const line = document.createElement('div');
+  line.className = `chat-line${message.playerId === state.visitorId ? ' mine' : ''}`;
+  const meta = document.createElement('small'); meta.className = 'chat-meta';
+  meta.textContent = `${message.name} · ${new Date(message.at).toLocaleTimeString('zh-Hant', { hour: '2-digit', minute: '2-digit' })}`;
+  const body = document.createElement('p'); body.textContent = message.text;
+  line.append(meta, body); log.append(line);
+  if (atBottom) log.scrollTop = log.scrollHeight;
 }
 function bindBoard() {
   const cells = document.querySelectorAll('.cell');
@@ -288,7 +329,7 @@ async function showMultiplayer() {
   const roomList = publicRooms.length
     ? publicRooms.map(room => `<button class="public-room" data-public-room="${room.code}"><span class="public-room-icon">${room.status === 'lobby' ? '♟' : '◉'}</span><span><strong>${escapeHtml(room.name)}</strong><small>${room.size} × ${room.size} · ${room.players} 位玩家${room.spectators ? ` · ${room.spectators} 位觀戰` : ''}</small></span><b>${room.status === 'lobby' ? '快速加入 →' : '觀戰 →'}</b></button>`).join('')
     : '<p class="empty public-empty">目前沒有公開房間。開一間讓大家加入吧！</p>';
-  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option></select></label><label>最後衝刺時間<select name="sprintSeconds"><option value="30">30 秒</option><option value="60" selected>60 秒</option><option value="90">90 秒</option><option value="120">120 秒</option></select></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section>`;
+  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option></select></label><label>最後衝刺秒數<input name="sprintSeconds" type="text" inputmode="numeric" maxlength="4" value="60" /></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section>`;
   document.querySelector('#back').onclick = home;
   document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target); socket.emit('create-room', { name: playerName(), playerId: state.visitorId, roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => result.error ? alert(result.error) : null); };
   document.querySelector('#join-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target); socket.emit('join-room', { code: form.get('code'), name: playerName(), playerId: state.visitorId, spectator: form.has('spectator') }, result => { if (result.error) alert(result.error); }); };
@@ -301,11 +342,13 @@ function bindRoomButtons() {
   document.querySelectorAll('[data-watch]').forEach(button => button.addEventListener('click', () => { state.watchingPlayerId = button.dataset.watch; renderGame(); }));
   document.querySelector('#restart-room')?.addEventListener('click', () => socket.emit('restart-room', { code: state.room.code, playerId: state.visitorId }, result => result?.error && alert(result.error)));
   document.querySelector('#role-toggle')?.addEventListener('click', () => socket.emit('set-lobby-role', { code: state.room.code, playerId: state.visitorId, spectator: !state.room.players.find(player => player.id === state.visitorId)?.spectator }, result => result?.error && alert(result.error)));
-  document.querySelector('#sprint-seconds')?.addEventListener('change', event => socket.emit('set-sprint-seconds', { code: state.room.code, playerId: state.visitorId, seconds: Number(event.target.value) }, result => result?.error && alert(result.error)));
+  document.querySelector('#sprint-mode')?.addEventListener('change', event => { const mode = event.target.value; socket.emit('set-sprint-setting', { code: state.room.code, playerId: state.visitorId, mode, value: mode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds }, result => result?.error && alert(result.error)); });
+  document.querySelector('#sprint-value')?.addEventListener('input', event => { const mode = document.querySelector('#sprint-mode')?.value; event.target.value = mode === 'multiply' ? event.target.value.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1') : event.target.value.replace(/\D/g, ''); });
+  document.querySelector('#sprint-value')?.addEventListener('change', event => { const mode = document.querySelector('#sprint-mode')?.value || 'fixed'; socket.emit('set-sprint-setting', { code: state.room.code, playerId: state.visitorId, mode, value: event.target.value }, result => { result?.error && alert(result.error); const stored = state.room.sprintMode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds; event.target.value = stored; }); });
 }
 function exitRoom(message) {
   state.room = null; state.resumeCode = null; state.connectionLost = false; state.watchingPlayerId = null;
-  state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear();
+  state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.chat = [];
   home();
   if (message) alert(message);
 }
@@ -350,8 +393,10 @@ socket.on('room-closed', ({ reason }) => exitRoom(reason));
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && !socket.connected) socket.connect();
 });
-socket.on('final-sprint', ({ deadline, sprintSeconds }) => { window.playSfx?.('sprint'); state.room.deadline = deadline; if (sprintSeconds) state.room.sprintSeconds = sprintSeconds; renderGame(`第一位完成！${sprintSeconds || state.room.sprintSeconds} 秒最後衝刺開始。`); });
+socket.on('final-sprint', ({ deadline, sprintSeconds }) => { window.playSfx?.('sprint'); state.room.deadline = deadline; renderGame(`第一位完成！${sprintSeconds} 秒最後衝刺開始。`); });
 socket.on('game-finished', ({ results }) => { window.lastResults = results; renderGame('本局結束！'); showFinishNotice(results); });
+socket.on('chat-message', message => { if (message.code !== state.room?.code) return; state.chat.push(message); if (state.chat.length > 50) state.chat.shift(); appendChatMessage(message); });
+socket.on('chat-backlog', messages => { state.chat = Array.isArray(messages) ? messages.slice(-50) : []; const log = document.querySelector('#chat-log'); if (log) { log.textContent = ''; state.chat.forEach(appendChatMessage); log.scrollTop = log.scrollHeight; } });
 setInterval(() => document.querySelectorAll('[data-deadline]').forEach(node => { const t = remainingSeconds(node.dataset.deadline); const changed = node.dataset.tickAt !== String(t); node.textContent = t; if (changed && t > 0 && t <= 5) window.playSfx?.('tick'); node.dataset.tickAt = t; }), 250);
 setInterval(() => { if (state.mode !== 'practice' || state.practiceMs != null) return; const node = document.querySelector('[data-practice]'); if (node) node.textContent = ((Date.now() - state.practiceStartedAt) / 1000).toFixed(1); }, 100);
 setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { const t = Math.max(0, Math.ceil((Number(node.dataset.countdown) - Date.now()) / 1000)); if (!node.dataset.ticked || String(t) !== node.textContent) { node.dataset.ticked = '1'; node.textContent = t; if (t > 0) window.playSfx?.('tick'); } }), 100);

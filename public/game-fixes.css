@@ -96,6 +96,8 @@
 .role-toggle:hover { background: #fff; border-color: var(--teal); }
 .sprint-setting { display: grid; gap: 6px; width: 100%; margin-top: 12px; color: var(--muted); font-size: 12px; }
 .sprint-setting select { width: 100%; padding: 9px 11px; border: 1px solid rgba(28, 106, 99, .28); border-radius: 999px; background: rgba(255, 255, 255, .5); color: var(--ink); }
+.sprint-setting input { width: 100%; padding: 9px 11px; border: 1px solid rgba(28, 106, 99, .28); border-radius: 999px; background: rgba(255, 255, 255, .5); color: var(--ink); }
+.sprint-setting small { color: var(--muted); font-size: 11px; }
 .sprint-setting.readonly { display: block; }
 .public-rooms { padding-bottom: 60px; }
 .public-room-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
@@ -118,6 +120,21 @@
 .next-action { display: flex; justify-content: center; margin: 18px 0 4px; }
 @keyframes eliminated-flash { 0% { transform: translateX(-5px); background: rgba(214, 62, 70, .42); } 45% { transform: translateX(5px); } 100% { transform: translateX(0); } }
 
+/* Room chat: a fixed-height log that scrolls, so a busy room never squashes the board. */
+.side-panels { display: grid; gap: 18px; align-self: start; }
+.chat-panel { padding: 22px 24px; border-radius: var(--radius); background: linear-gradient(170deg, #fdf6ea, #f4ead6); box-shadow: var(--shadow); }
+.chat-panel h2 { margin: 0 0 8px; font: 700 30px Fredoka, sans-serif; }
+.chat-log { display: flex; flex-direction: column; gap: 8px; height: 240px; overflow-y: auto; margin: 10px 0; padding: 10px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, .62); box-shadow: inset 0 0 0 1px rgba(30, 32, 41, .06); }
+.chat-line { display: grid; gap: 2px; }
+.chat-meta { color: var(--muted); font-size: 11px; }
+.chat-line p { margin: 0; padding: 7px 10px; border-radius: 10px; background: #fff; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; box-shadow: inset 0 0 0 1px rgba(30, 32, 41, .06); }
+.chat-line.mine p { background: rgba(28, 106, 99, .14); box-shadow: inset 0 0 0 1px rgba(28, 106, 99, .28); }
+.chat-line.mine .chat-meta { color: var(--teal); }
+.chat-form { display: flex; align-items: flex-end; gap: 8px; }
+.chat-form textarea { flex: 1; min-width: 0; resize: none; padding: 9px 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, .8); font-size: 13px; line-height: 1.45; }
+.chat-form textarea:focus { border-color: var(--teal); }
+.chat-notice { display: block; min-height: 16px; margin-top: 6px; color: var(--orange); font-size: 11px; }
+
 @media (max-width: 720px) {
   .hero { align-items: flex-end; }
   .hero-cat { flex: 0 0 max-content; padding-right: 0; margin-left: 6px; font: 600 26px/1 "Noto Sans TC", sans-serif; white-space: nowrap; word-break: keep-all; }
@@ -129,6 +146,8 @@
   .public-room-list { grid-template-columns: 1fr; }
   .continue-panel { grid-template-columns: 1fr; }
   .continue-panel .primary,.continue-panel .link-button { grid-column: auto; grid-row: auto; justify-self: start; }
+  .side-panels { order: -1; }
+  .chat-log { height: 160px; }
 }
 
 /* Keep the nickname field available even on narrow phones. */
