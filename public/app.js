@@ -159,7 +159,7 @@ function bindChat() {
   log.textContent = ''; state.chat.forEach(appendChatMessage); log.scrollTop = log.scrollHeight;
   form.onsubmit = event => { event.preventDefault(); sendChat(); };
   // The board listens on the document, so chat keystrokes stay inside the box.
-  input.onkeydown = event => { event.stopPropagation(); if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendChat(); } };
+  input.onkeydown = event => { event.stopPropagation(); if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendChat(); } };
 }
 function chatNotice(text) {
   const notice = document.querySelector('#chat-notice'); if (!notice) return;
@@ -170,7 +170,7 @@ function sendChat() {
   if (!text || !state.room) return;
   socket.emit('chat-message', { code: state.room.code, playerId: state.visitorId, text }, result => {
     if (result?.error) return chatNotice(result.error);
-    input.value = '';
+    if (input.value.trim() === text) input.value = '';
   });
 }
 // One DOM node per message: chatter never triggers a board re-render.
@@ -340,7 +340,7 @@ document.addEventListener('visibilitychange', () => {
 });
 socket.on('final-sprint', ({ deadline, sprintSeconds }) => { window.playSfx?.('sprint'); state.room.deadline = deadline; if (sprintSeconds) state.room.sprintSeconds = sprintSeconds; renderGame(`第一位完成！${sprintSeconds || state.room.sprintSeconds} 秒最後衝刺開始。`); });
 socket.on('game-finished', ({ results }) => { window.lastResults = results; renderGame('本局結束！'); showFinishNotice(results); });
-socket.on('chat-message', message => { state.chat.push(message); if (state.chat.length > 50) state.chat.shift(); appendChatMessage(message); });
+socket.on('chat-message', message => { if (message.code !== state.room?.code) return; state.chat.push(message); if (state.chat.length > 50) state.chat.shift(); appendChatMessage(message); });
 socket.on('chat-backlog', messages => { state.chat = Array.isArray(messages) ? messages.slice(-50) : []; const log = document.querySelector('#chat-log'); if (log) { log.textContent = ''; state.chat.forEach(appendChatMessage); log.scrollTop = log.scrollHeight; } });
 setInterval(() => document.querySelectorAll('[data-deadline]').forEach(node => { const t = remainingSeconds(node.dataset.deadline); const changed = node.dataset.tickAt !== String(t); node.textContent = t; if (changed && t > 0 && t <= 5) window.playSfx?.('tick'); node.dataset.tickAt = t; }), 250);
 setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { const t = Math.max(0, Math.ceil((Number(node.dataset.countdown) - Date.now()) / 1000)); if (!node.dataset.ticked || String(t) !== node.textContent) { node.dataset.ticked = '1'; node.textContent = t; if (t > 0) window.playSfx?.('tick'); } }), 100);

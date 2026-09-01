@@ -276,7 +276,7 @@ io.on('connection', socket => {
     player.chatTimes = (player.chatTimes || []).filter(at => now - at < CHAT_WINDOW);
     if (player.chatTimes.length >= CHAT_WINDOW_MAX || now - (player.chatTimes.at(-1) || 0) < CHAT_MIN_GAP) return callback?.({ error: '訊息太頻繁，先喝口水吧' });
     player.chatTimes.push(now);
-    const message = { id: nanoid(8), playerId, name: player.name, text: clean, at: now };
+    const message = { id: nanoid(8), code: room.code, playerId, name: player.name, text: clean, at: now };
     room.chat.push(message); if (room.chat.length > CHAT_HISTORY) room.chat.shift();
     io.to(room.code).emit('chat-message', message);
     callback?.({ ok: true });
