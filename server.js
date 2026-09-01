@@ -141,7 +141,9 @@ app.post('/api/single-complete', (req, res) => {
   const scores = readJson(SCORES_PATH, {});
   const entry = scores[visitorId] || { name: String(name).slice(0, 20), cleared: [] };
   entry.name = String(name).slice(0, 20);
-  if (levelIndex > 0 && !entry.cleared.includes(list[levelIndex - 1].id)) return res.status(403).json({ error: '請先完成前一關' });
+  // Replaying something already cleared stays allowed even when a newly rated
+  // level has since sorted in between it and the rung below.
+  if (levelIndex > 0 && !entry.cleared.includes(levelId) && !entry.cleared.includes(list[levelIndex - 1].id)) return res.status(403).json({ error: '請先完成前一關' });
   if (!entry.cleared.includes(levelId)) entry.cleared.push(levelId);
   scores[visitorId] = entry;
   writeJson(SCORES_PATH, scores);
