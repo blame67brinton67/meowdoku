@@ -1,7 +1,7 @@
 'use strict';
 
 const MIN_SIZE = 4;
-const MAX_SIZE = 10;
+const MAX_SIZE = 12;
 // A board that still has extra answers after this many repairs is thrown away:
 // a fresh board is cheaper than pushing a stubborn one further.
 const REPAIR_BUDGET_PER_CELL = 1;

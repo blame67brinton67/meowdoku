@@ -5,6 +5,7 @@ const { nanoid } = require('nanoid');
 const fs = require('fs');
 const path = require('path');
 const { generatePuzzle, countSolutions, clampSize } = require('./puzzle');
+const { generateAsync } = require('./generator');
 const { clampSprintSeconds, clampSprintFactor, normalizeSprintMode, resolveSprintSeconds } = require('./sprint');
 const { rate } = require('./difficulty');
 const { buildLadder, validLadder, LADDER_VERSION, LADDER_LENGTH } = require('./ladder');
@@ -64,7 +65,7 @@ function startLadder() {
   if (ladderBuilding || ladder.length >= LADDER_LENGTH) return;
   ladderBuilding = true;
   buildLadder({
-    levels: ladder, generate: generatePuzzle, makeId: () => nanoid(8),
+    levels: ladder, generate: generateAsync, makeId: () => nanoid(8),
     // A 10 × 10 candidate costs ~150ms of event loop, which nobody may pay in
     // the middle of a race, so the builder stands aside while a room is live.
     paused: () => [...rooms.values()].some(room => room.status === 'countdown' || room.status === 'playing'),
@@ -86,13 +87,13 @@ function publicLevel(level) { return { id: level.id, name: level.name, size: lev
 function refillMultiplayerPool(size) {
   if (refillingPoolSizes.has(size)) return;
   refillingPoolSizes.add(size);
-  const addOne = () => {
+  const addOne = async () => {
     if (multiplayerPuzzlePool.filter(puzzle => puzzle.size === size).length >= MULTIPLAYER_POOL_PER_SIZE) {
       refillingPoolSizes.delete(size);
       return;
     }
     try {
-      multiplayerPuzzlePool.push(generatePuzzle(size));
+      multiplayerPuzzlePool.push(await generateAsync(size));
       writeJson(PUZZLE_POOL_PATH, multiplayerPuzzlePool);
     } catch (error) {
       console.error('補充多人題庫失敗', error);
@@ -103,10 +104,10 @@ function refillMultiplayerPool(size) {
   };
   setImmediate(addOne);
 }
-function takeMultiplayerPuzzle(size) {
+async function takeMultiplayerPuzzle(size) {
   const normalizedSize = clampSize(size);
   const index = multiplayerPuzzlePool.findIndex(puzzle => puzzle.size === normalizedSize);
-  const puzzle = index < 0 ? generatePuzzle(normalizedSize) : multiplayerPuzzlePool.splice(index, 1)[0];
+  const puzzle = index < 0 ? await generateAsync(normalizedSize) : multiplayerPuzzlePool.splice(index, 1)[0];
   if (index >= 0) writeJson(PUZZLE_POOL_PATH, multiplayerPuzzlePool);
   refillMultiplayerPool(normalizedSize);
   return puzzle;
@@ -160,10 +161,10 @@ app.post('/api/single-complete', (req, res) => {
   writeJson(SCORES_PATH, scores);
   res.json({ ok: true, cleared: entry.cleared.length });
 });
-app.post('/api/admin/levels', (req, res) => {
+app.post('/api/admin/levels', async (req, res) => {
   if (req.header('x-admin-key') !== ADMIN_KEY) return res.status(401).json({ error: '管理密鑰不正確' });
   try {
-    const puzzle = generatePuzzle(req.body?.size);
+    const puzzle = await generateAsync(req.body?.size);
     const level = { id: nanoid(8), name: String(req.body?.name || `${puzzle.size} × ${puzzle.size} 新關卡`).slice(0, 40), createdAt: Date.now(), ...puzzle, rating: rate(puzzle) };
     levels = [...levels, level]; writeJson(LEVELS_PATH, levels);
     res.status(201).json(publicLevel(level));
@@ -270,8 +271,11 @@ function allPlayersResolved(room) {
 }
 
 io.on('connection', socket => {
-  socket.on('create-room', ({ name, playerId, roomName, levelId, size, visibility, sprintMode, sprintSeconds, sprintFactor }, callback) => {
-    const puzzle = levelId ? singleLevels().find(level => level.id === levelId) : takeMultiplayerPuzzle(size || 7);
+  socket.on('create-room', async ({ name, playerId, roomName, levelId, size, visibility, sprintMode, sprintSeconds, sprintFactor }, callback) => {
+    let puzzle;
+    try { puzzle = levelId ? singleLevels().find(level => level.id === levelId) : await takeMultiplayerPuzzle(size || 7); }
+    catch (error) { return callback?.({ error: error.message }); }
+    if (!socket.connected) return callback?.({ error: '建立房間時連線已中斷' });
     if (!puzzle) return callback({ error: '找不到關卡' });
     const code = nanoid(5).toUpperCase();
     const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId,
@@ -370,16 +374,23 @@ io.on('connection', socket => {
     room.sprintMode = nextMode;
     emitRoom(room); callback?.({ ok: true });
   });
-  socket.on('restart-room', ({ code, playerId }, callback) => {
+  socket.on('restart-room', async ({ code, playerId }, callback) => {
     const room = rooms.get(code);
     if (!room || room.hostId !== playerId) return callback?.({ error: '只有房主可以重新開始' });
     if (room.status !== 'finished') return callback?.({ error: '本局尚未結束' });
-    clearTimeout(room.timer); clearTimeout(room.countdownTimer);
-    room.puzzle = generatePuzzle(room.puzzle.size); room.status = 'lobby'; room.startedAt = null; room.deadline = null; room.countdownEnds = null;
-    for (const player of room.players.values()) {
-      player.alive = true; player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
-    }
-    emitRoom(room); checkAllSpectator(room); callback?.({ ok: true });
+    if (room.restartPending) return callback?.({ error: '正在準備下一局，請稍候' });
+    room.restartPending = true;
+    try {
+      const puzzle = await generateAsync(room.puzzle.size);
+      if (!socket.connected || rooms.get(code) !== room || room.hostId !== playerId) return callback?.({ error: '房間已關閉或房主已離開' });
+      clearTimeout(room.timer); clearTimeout(room.countdownTimer);
+      room.puzzle = puzzle; room.status = 'lobby'; room.startedAt = null; room.deadline = null; room.countdownEnds = null;
+      for (const player of room.players.values()) {
+        player.alive = true; player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
+      }
+      emitRoom(room); checkAllSpectator(room); callback?.({ ok: true });
+    } catch (error) { callback?.({ error: error.message }); }
+    finally { room.restartPending = false; }
   });
   socket.on('resume-room', ({ code, playerId, name }, callback) => {
     const room = rooms.get(String(code || '').toUpperCase());
