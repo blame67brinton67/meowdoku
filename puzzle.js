@@ -114,14 +114,25 @@ function growRegions(size, cats, { floor, ceiling }) {
 function findSolutions(regions, size, stopAt = 2) {
   const found = [];
   const columns = new Array(size);
+  const regionBitOf = new Uint32Array(size * size), regionsFrom = new Uint32Array(size + 1);
+  let allRegions = 0;
+  for (let cell = 0; cell < regionBitOf.length; cell++) {
+    regionBitOf[cell] = 1 << regions[cell]; allRegions |= regionBitOf[cell];
+  }
+  for (let row = size - 1; row >= 0; row--) {
+    let rowRegions = 0;
+    for (let col = 0; col < size; col++) rowRegions |= regionBitOf[row * size + col];
+    regionsFrom[row] = regionsFrom[row + 1] | rowRegions;
+  }
   let usedColumns = 0, usedRegions = 0;
   function search(row, previousCol) {
     if (found.length >= stopAt) return;
     if (row === size) { found.push(columns.slice()); return; }
+    if ((allRegions & ~usedRegions) & ~regionsFrom[row]) return;
     for (let col = 0; col < size; col++) {
       if (usedColumns & (1 << col)) continue;
       if (previousCol >= 0 && Math.abs(previousCol - col) <= 1) continue;
-      const regionBit = 1 << regions[row * size + col];
+      const regionBit = regionBitOf[row * size + col];
       if (usedRegions & regionBit) continue;
       usedColumns |= 1 << col; usedRegions |= regionBit; columns[row] = col;
       search(row + 1, col);
