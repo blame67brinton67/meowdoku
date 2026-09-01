@@ -4,7 +4,7 @@ const socket = io();
 const state = {
   visitorId: localStorage.visitorId || crypto.randomUUID(),
   name: localStorage.meowdokuName || '',
-  mode: 'home', single: null, room: null, marks: new Set(), cats: new Set(), pending: new Set(), dragged: false, dragMarking: false,
+  mode: 'home', single: null, room: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false,
   touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: ''
 };
 localStorage.visitorId = state.visitorId;
@@ -93,10 +93,10 @@ function renderGame(message = '') {
     return;
   }
   renderedLayout = layout;
-  view.innerHTML = `<section class="game-layout"><div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div>${state.mode === 'single' ? `<p class="eyebrow">SOLO • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div></div><div class="game-status">${state.mode === 'single' ? `<span>找出 <b>${state.cats.size} / ${puzzle.size}</b> 隻貓咪</span>` : gameStatus(room, me)}<span id="game-message">${message}</span></div>${boardArea}${footer}${nextAction}</div>${state.mode === 'multi' ? renderRoomPanel(room, me) : '<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>點錯一格，挑戰失敗</li></ul></aside>'}</section>`;
+  view.innerHTML = `<section class="game-layout"><div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div>${state.mode === 'single' ? `<p class="eyebrow">SOLO • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div></div><div class="game-status">${state.mode === 'single' ? `<span>找出 <b>${state.cats.size} / ${puzzle.size}</b> 隻貓咪</span>` : gameStatus(room, me)}<span id="game-message">${message}</span></div>${boardArea}${footer}${nextAction}</div>${state.mode === 'multi' ? `<div class="side-panels">${renderRoomPanel(room, me)}${renderChatPanel()}</div>` : '<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>點錯一格，挑戰失敗</li></ul></aside>'}</section>`;
   document.querySelector('#quit').onclick = state.mode === 'single' ? showLevels : leaveRoom;
   document.querySelector('#next-level')?.addEventListener('click', () => state.nextSingleId ? startSingle(state.nextSingleId) : showLevels());
-  bindBoard(); bindRoomButtons();
+  bindBoard(); bindRoomButtons(); bindChat();
 }
 function patchGame(puzzle, room, me, isViewing, message) {
   document.querySelector('.game-status').innerHTML = `${state.mode === 'single' ? `<span>找出 <b>${state.cats.size} / ${puzzle.size}</b> 隻貓咪</span>` : gameStatus(room, me)}<span id="game-message">${message}</span>`;
@@ -149,6 +149,41 @@ function renderRoomPanel(room, me) {
       : `<p class="sprint-setting readonly">最後衝刺時間：<b>${room.sprintSeconds} 秒</b></p>`
     : '';
   return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; return `<button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span><strong>${escapeHtml(player.name)}${player.id === state.visitorId ? '（你）' : ''}</strong><small class="player-progress">${status}</small></button>`; }).join('')}</div>${roleToggle}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? '<button class="primary wide" id="start-room">開始這局</button>' : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>${replay}` : ''}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+}
+function renderChatPanel() {
+  return `<aside class="chat-panel"><div><p class="eyebrow">ROOM CHAT</p><h2>房間聊天</h2></div><div class="chat-log" id="chat-log"></div><form class="chat-form" id="chat-form"><textarea id="chat-input" rows="1" maxlength="200" placeholder="跟大家說點什麼…"></textarea><button class="primary" type="submit">送出</button></form><small class="chat-notice" id="chat-notice"></small></aside>`;
+}
+function bindChat() {
+  const form = document.querySelector('#chat-form'), input = document.querySelector('#chat-input'), log = document.querySelector('#chat-log');
+  if (!form) return;
+  log.textContent = ''; state.chat.forEach(appendChatMessage); log.scrollTop = log.scrollHeight;
+  form.onsubmit = event => { event.preventDefault(); sendChat(); };
+  // The board listens on the document, so chat keystrokes stay inside the box.
+  input.onkeydown = event => { event.stopPropagation(); if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendChat(); } };
+}
+function chatNotice(text) {
+  const notice = document.querySelector('#chat-notice'); if (!notice) return;
+  notice.textContent = text; clearTimeout(chatNotice.timer); chatNotice.timer = setTimeout(() => notice.textContent = '', 1800);
+}
+function sendChat() {
+  const input = document.querySelector('#chat-input'), text = input?.value.trim();
+  if (!text || !state.room) return;
+  socket.emit('chat-message', { code: state.room.code, playerId: state.visitorId, text }, result => {
+    if (result?.error) return chatNotice(result.error);
+    input.value = '';
+  });
+}
+// One DOM node per message: chatter never triggers a board re-render.
+function appendChatMessage(message) {
+  const log = document.querySelector('#chat-log'); if (!log) return;
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 8;
+  const line = document.createElement('div');
+  line.className = `chat-line${message.playerId === state.visitorId ? ' mine' : ''}`;
+  const meta = document.createElement('small'); meta.className = 'chat-meta';
+  meta.textContent = `${message.name} · ${new Date(message.at).toLocaleTimeString('zh-Hant', { hour: '2-digit', minute: '2-digit' })}`;
+  const body = document.createElement('p'); body.textContent = message.text;
+  line.append(meta, body); log.append(line);
+  if (atBottom) log.scrollTop = log.scrollHeight;
 }
 function bindBoard() {
   const cells = document.querySelectorAll('.cell');
@@ -258,7 +293,7 @@ function bindRoomButtons() {
 }
 function exitRoom(message) {
   state.room = null; state.resumeCode = null; state.connectionLost = false; state.watchingPlayerId = null;
-  state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear();
+  state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.chat = [];
   home();
   if (message) alert(message);
 }
@@ -305,6 +340,8 @@ document.addEventListener('visibilitychange', () => {
 });
 socket.on('final-sprint', ({ deadline, sprintSeconds }) => { window.playSfx?.('sprint'); state.room.deadline = deadline; if (sprintSeconds) state.room.sprintSeconds = sprintSeconds; renderGame(`第一位完成！${sprintSeconds || state.room.sprintSeconds} 秒最後衝刺開始。`); });
 socket.on('game-finished', ({ results }) => { window.lastResults = results; renderGame('本局結束！'); showFinishNotice(results); });
+socket.on('chat-message', message => { state.chat.push(message); if (state.chat.length > 50) state.chat.shift(); appendChatMessage(message); });
+socket.on('chat-backlog', messages => { state.chat = Array.isArray(messages) ? messages.slice(-50) : []; const log = document.querySelector('#chat-log'); if (log) { log.textContent = ''; state.chat.forEach(appendChatMessage); log.scrollTop = log.scrollHeight; } });
 setInterval(() => document.querySelectorAll('[data-deadline]').forEach(node => { const t = remainingSeconds(node.dataset.deadline); const changed = node.dataset.tickAt !== String(t); node.textContent = t; if (changed && t > 0 && t <= 5) window.playSfx?.('tick'); node.dataset.tickAt = t; }), 250);
 setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { const t = Math.max(0, Math.ceil((Number(node.dataset.countdown) - Date.now()) / 1000)); if (!node.dataset.ticked || String(t) !== node.textContent) { node.dataset.ticked = '1'; node.textContent = t; if (t > 0) window.playSfx?.('tick'); } }), 100);
 

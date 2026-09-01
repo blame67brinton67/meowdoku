@@ -13,6 +13,7 @@ const PORT = Number(process.env.PORT || 3000);
 const ADMIN_KEY = process.env.ADMIN_KEY || 'meowdoku-admin';
 const SPRINT_MIN = 15, SPRINT_MAX = 300, SPRINT_DEFAULT = 60;
 const IDLE_GRACE = 20_000;
+const CHAT_MAX_LEN = 200, CHAT_HISTORY = 50, CHAT_WINDOW = 5_000, CHAT_WINDOW_MAX = 5, CHAT_MIN_GAP = 400;
 const ALL_SPECTATOR_CLOSE = 10 * 60_000;
 const DATA_DIR = path.join(__dirname, 'data');
 const LEVELS_PATH = path.join(DATA_DIR, 'levels.json');
@@ -214,7 +215,7 @@ io.on('connection', socket => {
     const code = nanoid(5).toUpperCase();
     const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId,
       visibility: visibility === 'private' ? 'private' : 'public',
-      players: new Map(), startedAt: null, deadline: null, timer: null, spectatorTimer: null, sprintSeconds: clampSprintSeconds(sprintSeconds) };
+      players: new Map(), startedAt: null, deadline: null, timer: null, spectatorTimer: null, sprintSeconds: clampSprintSeconds(sprintSeconds), chat: [] };
     rooms.set(code, room); joinRoom(socket, room, { name, playerId, spectator: false }); callback({ code });
   });
   socket.on('join-room', ({ code, name, playerId, spectator }, callback) => {
@@ -266,6 +267,20 @@ io.on('connection', socket => {
     player.marks = new Set(marks.filter(key => typeof key === 'string').slice(0, room.puzzle.size * room.puzzle.size));
     emitRoomSoon(room);
   });
+  socket.on('chat-message', ({ code, playerId, text }, callback) => {
+    const room = rooms.get(code), player = room?.players.get(playerId);
+    if (!room || !player || player.socketId !== socket.id) return callback?.({ error: '找不到房間成員' });
+    const clean = String(text ?? '').replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, ' ').trim().slice(0, CHAT_MAX_LEN);
+    if (!clean) return callback?.({ ok: true });
+    const now = Date.now();
+    player.chatTimes = (player.chatTimes || []).filter(at => now - at < CHAT_WINDOW);
+    if (player.chatTimes.length >= CHAT_WINDOW_MAX || now - (player.chatTimes.at(-1) || 0) < CHAT_MIN_GAP) return callback?.({ error: '訊息太頻繁，先喝口水吧' });
+    player.chatTimes.push(now);
+    const message = { id: nanoid(8), playerId, name: player.name, text: clean, at: now };
+    room.chat.push(message); if (room.chat.length > CHAT_HISTORY) room.chat.shift();
+    io.to(room.code).emit('chat-message', message);
+    callback?.({ ok: true });
+  });
   socket.on('set-lobby-role', ({ code, playerId, spectator }, callback) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
     if (!room || !player) return callback?.({ error: '找不到房間成員' });
@@ -301,7 +316,7 @@ io.on('connection', socket => {
     const wasIdle = player.idle;
     clearTimeout(player.idleTimer); player.idleTimer = null;
     player.socketId = socket.id; player.disconnectedAt = null; player.idle = false;
-    socket.join(room.code); emitRoom(room); checkAllSpectator(room);
+    socket.join(room.code); socket.emit('chat-backlog', room.chat); emitRoom(room); checkAllSpectator(room);
     if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
     callback?.({ ok: true, spectator: player.spectator, movedToSpectator: wasIdle && player.spectator });
   });
@@ -331,7 +346,7 @@ io.on('connection', socket => {
 function joinRoom(socket, room, { name, playerId, spectator }) {
   for (const existing of room.players.values()) if (existing.id === playerId) { clearTimeout(existing.idleTimer); room.players.delete(existing.id); }
   const player = { id: playerId, name: String(name || '神秘貓奴').slice(0, 20), spectator, socketId: socket.id, idle: false, disconnectedAt: null, idleTimer: null, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
-  room.players.set(playerId, player); socket.join(room.code); emitRoom(room); checkAllSpectator(room);
+  room.players.set(playerId, player); socket.join(room.code); socket.emit('chat-backlog', room.chat); emitRoom(room); checkAllSpectator(room);
 }
 
 server.listen(PORT, () => console.log(`MeowDoku is ready at http://localhost:${PORT}`));
