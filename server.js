@@ -4,7 +4,8 @@ const { Server } = require('socket.io');
 const { nanoid } = require('nanoid');
 const fs = require('fs');
 const path = require('path');
-const { generatePuzzle, countSolutions, clampSize } = require('./puzzle');
+const { generatePuzzle, countSolutions, clampSize, parseBoardText } = require('./puzzle');
+const { generateAsync } = require('./generator');
 const { clampSprintSeconds, clampSprintFactor, normalizeSprintMode, resolveSprintSeconds } = require('./sprint');
 const { rate } = require('./difficulty');
 const { buildLadder, validLadder, LADDER_VERSION, LADDER_LENGTH } = require('./ladder');
@@ -64,9 +65,8 @@ function startLadder() {
   if (ladderBuilding || ladder.length >= LADDER_LENGTH) return;
   ladderBuilding = true;
   buildLadder({
-    levels: ladder, generate: generatePuzzle, makeId: () => nanoid(8),
-    // A 10 × 10 candidate costs ~150ms of event loop, which nobody may pay in
-    // the middle of a race, so the builder stands aside while a room is live.
+    levels: ladder, generate: generateAsync, makeId: () => nanoid(8),
+    // The builder still consumes CPU, so it stands aside while a room is live.
     paused: () => [...rooms.values()].some(room => room.status === 'countdown' || room.status === 'playing'),
     onAccepted: () => writeJson(LADDER_PATH, { version: LADDER_VERSION, levels: ladder }),
     onDone: () => { ladderBuilding = false; console.log(`單人階梯完成 ${ladder.length} 關`); }
@@ -80,19 +80,23 @@ function singleLevels() {
 let multiplayerPuzzlePool = readJson(PUZZLE_POOL_PATH, []);
 const refillingPoolSizes = new Set();
 const MULTIPLAYER_POOL_PER_SIZE = 4;
-function publicLevel(level) { return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt, rating: level.rating || null }; }
+function publicLevel(level) {
+  const rating = level.rating ? { ...level.rating } : null;
+  if (rating) delete rating.solution;
+  return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt, rating };
+}
 // One puzzle per tick: the pool is refilled without holding up the socket
 // traffic of a match that is already running.
 function refillMultiplayerPool(size) {
   if (refillingPoolSizes.has(size)) return;
   refillingPoolSizes.add(size);
-  const addOne = () => {
+  const addOne = async () => {
     if (multiplayerPuzzlePool.filter(puzzle => puzzle.size === size).length >= MULTIPLAYER_POOL_PER_SIZE) {
       refillingPoolSizes.delete(size);
       return;
     }
     try {
-      multiplayerPuzzlePool.push(generatePuzzle(size));
+      multiplayerPuzzlePool.push(await generateAsync(size));
       writeJson(PUZZLE_POOL_PATH, multiplayerPuzzlePool);
     } catch (error) {
       console.error('補充多人題庫失敗', error);
@@ -103,10 +107,10 @@ function refillMultiplayerPool(size) {
   };
   setImmediate(addOne);
 }
-function takeMultiplayerPuzzle(size) {
+async function takeMultiplayerPuzzle(size) {
   const normalizedSize = clampSize(size);
   const index = multiplayerPuzzlePool.findIndex(puzzle => puzzle.size === normalizedSize);
-  const puzzle = index < 0 ? generatePuzzle(normalizedSize) : multiplayerPuzzlePool.splice(index, 1)[0];
+  const puzzle = index < 0 ? await generateAsync(normalizedSize) : multiplayerPuzzlePool.splice(index, 1)[0];
   if (index >= 0) writeJson(PUZZLE_POOL_PATH, multiplayerPuzzlePool);
   refillMultiplayerPool(normalizedSize);
   return puzzle;
@@ -160,24 +164,48 @@ app.post('/api/single-complete', (req, res) => {
   writeJson(SCORES_PATH, scores);
   res.json({ ok: true, cleared: entry.cleared.length });
 });
-app.post('/api/admin/levels', (req, res) => {
+app.post('/api/admin/levels', async (req, res) => {
   if (req.header('x-admin-key') !== ADMIN_KEY) return res.status(401).json({ error: '管理密鑰不正確' });
   try {
-    const puzzle = generatePuzzle(req.body?.size);
+    const puzzle = await generateAsync(req.body?.size);
     const level = { id: nanoid(8), name: String(req.body?.name || `${puzzle.size} × ${puzzle.size} 新關卡`).slice(0, 40), createdAt: Date.now(), ...puzzle, rating: rate(puzzle) };
     levels = [...levels, level]; writeJson(LEVELS_PATH, levels);
     res.status(201).json(publicLevel(level));
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
+app.post('/api/admin/levels/import', (req, res) => {
+  if (req.header('x-admin-key') !== ADMIN_KEY) return res.status(401).json({ error: '管理密鑰不正確' });
+  const text = req.body?.text;
+  if (typeof text !== 'string') return res.status(400).json({ error: '地圖文字必須是文字格式。' });
+  if (text.length > 8192) return res.status(400).json({ error: '地圖文字不得超過 8 KB。' });
+  let puzzle;
+  try { puzzle = parseBoardText(text); } catch (error) { return res.status(400).json({ error: error.message }); }
+  const level = { id: nanoid(8), name: String(req.body?.name || `${puzzle.size} × ${puzzle.size} 匯入關卡`).slice(0, 40), createdAt: Date.now(), ...puzzle, rating: rate(puzzle) };
+  levels = [...levels, level]; writeJson(LEVELS_PATH, levels);
+  res.status(201).json(publicLevel(level));
+});
 
+function leaderboardRows(room) {
+  const players = new Map();
+  for (const record of room.leaderboard) {
+    const current = players.get(record.playerId);
+    if (!current) players.set(record.playerId, { playerId: record.playerId, name: record.name, ms: record.ms, round: record.round, wins: record.won ? 1 : 0 });
+    else {
+      current.wins += record.won ? 1 : 0;
+      if (record.ms < current.ms) { current.ms = record.ms; current.round = record.round; current.name = record.name; }
+    }
+  }
+  return [...players.values()].sort((a, b) => a.ms - b.ms || a.playerId.localeCompare(b.playerId)).slice(0, 10);
+}
 function compactRoom(room) {
   return {
     code: room.code, name: room.name, status: room.status, hostId: room.hostId, visibility: room.visibility,
     // Do not reveal the region arrangement to waiting players or spectators.
     puzzle: room.status === 'playing' || room.status === 'finished'
-      ? publicLevel(room.puzzle)
+      ? { ...publicLevel(room.puzzle), ...(room.status === 'finished' ? { solution: room.puzzle.solution } : {}) }
       : { id: room.puzzle.id, name: room.puzzle.name, size: room.puzzle.size },
     countdownEnds: room.countdownEnds, deadline: room.deadline, sprintMode: room.sprintMode, sprintSeconds: room.sprintSeconds, sprintFactor: room.sprintFactor,
+    leaderboard: leaderboardRows(room),
     players: [...room.players.values()].map(player => ({
       id: player.id, name: player.name, host: player.id === room.hostId, spectator: player.spectator, idle: player.idle, alive: player.alive,
       found: player.found.size, completedAt: player.completedAt,
@@ -270,11 +298,14 @@ function allPlayersResolved(room) {
 }
 
 io.on('connection', socket => {
-  socket.on('create-room', ({ name, playerId, roomName, levelId, size, visibility, sprintMode, sprintSeconds, sprintFactor }, callback) => {
-    const puzzle = levelId ? singleLevels().find(level => level.id === levelId) : takeMultiplayerPuzzle(size || 7);
+  socket.on('create-room', async ({ name, playerId, roomName, levelId, size, visibility, sprintMode, sprintSeconds, sprintFactor }, callback) => {
+    let puzzle;
+    try { puzzle = levelId ? singleLevels().find(level => level.id === levelId) : await takeMultiplayerPuzzle(size || 7); }
+    catch (error) { return callback?.({ error: error.message }); }
+    if (!socket.connected) return callback?.({ error: '建立房間時連線已中斷' });
     if (!puzzle) return callback({ error: '找不到關卡' });
     const code = nanoid(5).toUpperCase();
-    const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId,
+    const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId, round: 1, leaderboard: [],
       visibility: visibility === 'private' ? 'private' : 'public',
       players: new Map(), startedAt: null, deadline: null, timer: null, spectatorTimer: null,
       sprintMode: normalizeSprintMode(sprintMode, 'fixed'), sprintSeconds: clampSprintSeconds(sprintSeconds), sprintFactor: clampSprintFactor(sprintFactor), chat: [] };
@@ -313,6 +344,8 @@ io.on('connection', socket => {
     player.found.add(`${row}:${col}`); socket.emit('guess-result', { row, col, hit: true });
     if (player.found.size === room.puzzle.size) {
       player.completedAt = Date.now();
+      room.leaderboard.push({ playerId: player.id, name: player.name, ms: player.completedAt - room.startedAt, at: player.completedAt, round: room.round, won: !room.leaderboard.some(record => record.round === room.round && record.won) });
+      if (room.leaderboard.length > 200) room.leaderboard.splice(0, room.leaderboard.length - 200);
       if (allPlayersResolved(room)) { finishRoom(room); return; }
       if (!room.deadline) {
         const sprintSeconds = resolveSprintSeconds(room, Date.now() - room.startedAt);
@@ -370,16 +403,23 @@ io.on('connection', socket => {
     room.sprintMode = nextMode;
     emitRoom(room); callback?.({ ok: true });
   });
-  socket.on('restart-room', ({ code, playerId }, callback) => {
+  socket.on('restart-room', async ({ code, playerId }, callback) => {
     const room = rooms.get(code);
     if (!room || room.hostId !== playerId) return callback?.({ error: '只有房主可以重新開始' });
     if (room.status !== 'finished') return callback?.({ error: '本局尚未結束' });
-    clearTimeout(room.timer); clearTimeout(room.countdownTimer);
-    room.puzzle = generatePuzzle(room.puzzle.size); room.status = 'lobby'; room.startedAt = null; room.deadline = null; room.countdownEnds = null;
-    for (const player of room.players.values()) {
-      player.alive = true; player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
-    }
-    emitRoom(room); checkAllSpectator(room); callback?.({ ok: true });
+    if (room.restartPending) return callback?.({ error: '正在準備下一局，請稍候' });
+    room.restartPending = true;
+    try {
+      const puzzle = await generateAsync(room.puzzle.size);
+      if (!socket.connected || rooms.get(code) !== room || room.hostId !== playerId) return callback?.({ error: '房間已關閉或房主已離開' });
+      clearTimeout(room.timer); clearTimeout(room.countdownTimer);
+      room.puzzle = puzzle; room.round++; room.status = 'lobby'; room.startedAt = null; room.deadline = null; room.countdownEnds = null;
+      for (const player of room.players.values()) {
+        player.alive = true; player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
+      }
+      emitRoom(room); checkAllSpectator(room); callback?.({ ok: true });
+    } catch (error) { callback?.({ error: error.message }); }
+    finally { room.restartPending = false; }
   });
   socket.on('resume-room', ({ code, playerId, name }, callback) => {
     const room = rooms.get(String(code || '').toUpperCase());

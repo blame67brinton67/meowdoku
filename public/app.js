@@ -14,7 +14,35 @@ nameInput.value = state.name;
 nameInput.addEventListener('input', () => { state.name = nameInput.value.trim(); localStorage.meowdokuName = state.name; });
 // Deep, hue *and* lightness varied so neighbouring regions stay apart even at
 // 10 × 10; consecutive entries differ most because region ids grow by BFS.
-const palette = ['#c4423d', '#c07c12', '#2c7a4b', '#2b6cb0', '#6b4b9e', '#b83f7d', '#8aa625', '#159490', '#8a4a1f', '#4b5768'];
+const DEFAULT_PALETTE = ['#c4423d', '#2b6cb0', '#c07c12', '#2c7a4b', '#6b4b9e', '#8aa625', '#b83f7d',
+                         '#159490', '#8a4a1f', '#4b5768', '#7a2f4e', '#1f6f8b'];
+const DEFAULT_THEME = { palette: DEFAULT_PALETTE, boardLine: '#c7cad1', paper: '#fffaf1' };
+const VALID_COLOR = /^#[0-9a-f]{6}$/i;
+const validColor = value => typeof value === 'string' && VALID_COLOR.test(value) ? value : null;
+function readTheme() {
+  let stored = {};
+  try { stored = JSON.parse(localStorage.meowdokuTheme) || {}; } catch {}
+  return {
+    palette: DEFAULT_PALETTE.map((color, index) => validColor(stored.palette?.[index]) || color),
+    boardLine: validColor(stored.boardLine) || DEFAULT_THEME.boardLine,
+    paper: validColor(stored.paper) || DEFAULT_THEME.paper
+  };
+}
+const theme = readTheme();
+let palette = theme.palette.slice();
+function saveTheme() { localStorage.meowdokuTheme = JSON.stringify(theme); }
+function applyTheme() {
+  const root = document.documentElement;
+  root.style.setProperty('--board-line', theme.boardLine);
+  root.style.setProperty('--paper', theme.paper);
+  palette = theme.palette.slice();
+  document.querySelectorAll('.cell').forEach(cell => cell.style.setProperty('--region', palette[Number(cell.dataset.region) % palette.length]));
+}
+function syncThemeInputs() {
+  document.querySelectorAll('[data-theme-palette]').forEach(input => { input.value = theme.palette[Number(input.dataset.themePalette)]; });
+  document.querySelector('[data-theme-key="boardLine"]').value = theme.boardLine;
+  document.querySelector('[data-theme-key="paper"]').value = theme.paper;
+}
 const api = async (url, options) => {
   const response = await fetch(url, options); const data = await response.json();
   if (!response.ok) throw new Error(data.error || '發生錯誤'); return data;
@@ -34,6 +62,12 @@ const outcomeLabel = outcome => outcome.status === 'solved' ? `第 ${outcome.ran
 document.querySelector('#home-button').addEventListener('click', home);
 document.querySelector('#admin-button').addEventListener('click', () => { document.querySelector('#admin-message').textContent = ''; document.querySelector('#admin-dialog').showModal(); });
 document.querySelector('#admin-dialog .close').addEventListener('click', () => document.querySelector('#admin-dialog').close());
+document.querySelector('#theme-button').addEventListener('click', () => { syncThemeInputs(); document.querySelector('#theme-dialog').showModal(); });
+document.querySelector('#theme-dialog .close').addEventListener('click', () => document.querySelector('#theme-dialog').close());
+document.querySelectorAll('[data-theme-palette]').forEach(input => input.addEventListener('input', () => { theme.palette[Number(input.dataset.themePalette)] = input.value; saveTheme(); applyTheme(); }));
+document.querySelectorAll('[data-theme-key]').forEach(input => input.addEventListener('input', () => { theme[input.dataset.themeKey] = input.value; saveTheme(); applyTheme(); }));
+document.querySelector('#reset-theme').addEventListener('click', () => { theme.palette = DEFAULT_PALETTE.slice(); theme.boardLine = DEFAULT_THEME.boardLine; theme.paper = DEFAULT_THEME.paper; saveTheme(); syncThemeInputs(); applyTheme(); });
+applyTheme();
 // Right-click is reserved for puzzle annotation, not the browser context menu.
 document.addEventListener('contextmenu', event => event.preventDefault());
 document.querySelector('#admin-form').addEventListener('submit', async event => {
@@ -42,6 +76,14 @@ document.querySelector('#admin-form').addEventListener('submit', async event => 
   try {
     const level = await api('/api/admin/levels', { method: 'POST', headers: { 'content-type': 'application/json', 'x-admin-key': document.querySelector('#admin-key').value }, body: JSON.stringify({ name: document.querySelector('#level-name').value, size: document.querySelector('#level-size').value }) });
     message.textContent = `已發布「${level.name}」！${level.rating ? ` 難度 ${stars(level.rating)}（${level.rating.hardestName}，${level.rating.score} 分）` : ''}`; setTimeout(() => document.querySelector('#admin-dialog').close(), 900);
+  } catch (error) { message.textContent = error.message; } finally { button.disabled = false; }
+});
+document.querySelector('#import-level').addEventListener('click', async () => {
+  const button = document.querySelector('#import-level'), message = document.querySelector('#admin-message');
+  button.disabled = true; message.textContent = '正在匯入地圖…';
+  try {
+    const level = await api('/api/admin/levels/import', { method: 'POST', headers: { 'content-type': 'application/json', 'x-admin-key': document.querySelector('#admin-key').value }, body: JSON.stringify({ name: document.querySelector('#level-name').value, text: document.querySelector('#map-text').value }) });
+    message.textContent = `已匯入「${level.name}」！${level.rating ? ` 難度 ${stars(level.rating)}（${level.rating.hardestName}，${level.rating.score} 分）` : ''}`; setTimeout(() => document.querySelector('#admin-dialog').close(), 900);
   } catch (error) { message.textContent = error.message; } finally { button.disabled = false; }
 });
 
@@ -170,7 +212,7 @@ function renderBoard(puzzle, locked, boardState = { cats: state.cats, marks: sta
   return `<div class="board ${locked ? 'locked' : ''}" style="--n:${puzzle.size}">${puzzle.regions.map((region, cell) => {
     const row = Math.floor(cell / puzzle.size), col = cell % puzzle.size, key = `${row}:${col}`;
     const cat = boardState.cats.has(key), wrong = Boolean(boardState.wrong?.has(key)), mark = boardState.marks.has(key);
-    return `<button class="cell ${cat ? 'cat' : ''} ${mark && !cat && !wrong ? 'mark' : ''} ${wrong ? 'wrong' : ''} ${state.pending.has(key) && !cat && !wrong ? 'pending' : ''}" style="--region:${palette[region % palette.length]}" data-row="${row}" data-col="${col}" aria-label="第 ${row + 1} 行第 ${col + 1} 列">${cellContent(cat, wrong, mark)}</button>`;
+    return `<button class="cell ${cat ? 'cat' : ''} ${mark && !cat && !wrong ? 'mark' : ''} ${wrong ? 'wrong' : ''} ${state.pending.has(key) && !cat && !wrong ? 'pending' : ''}" style="--region:${palette[region % palette.length]}" data-region="${region}" data-row="${row}" data-col="${col}" aria-label="第 ${row + 1} 行第 ${col + 1} 列">${cellContent(cat, wrong, mark)}</button>`;
   }).join('')}</div>`;
 }
 function gameStatus(room, me) {
@@ -183,6 +225,9 @@ function renderRoomPanel(room, me) {
   const canWatch = Boolean(me?.spectator || me?.alive === false || me?.completedAt);
   const watching = room.players.find(player => player.id === state.watchingPlayerId);
   const replay = room.status === 'finished' && isHost ? '<button class="primary wide" id="restart-room">用原房號再來一局</button>' : '';
+  const exportMap = room.status === 'finished' && room.puzzle.solution
+    ? '<button class="copy-button" id="copy-map">複製地圖</button><small class="map-copy-message" id="map-copy-message"></small>'
+    : room.status === 'playing' ? '<small class="map-copy-hint">比賽結束後可複製地圖</small>' : '';
   const roleToggle = room.status === 'lobby'
     ? `<button class="role-toggle" id="role-toggle">${me?.spectator ? '加入本局，成為玩家' : '改為觀戰者'}</button>` : '';
   const sprintMode = room.sprintMode === 'multiply' ? 'multiply' : 'fixed';
@@ -192,7 +237,10 @@ function renderRoomPanel(room, me) {
       ? `<label class="sprint-setting">最後衝刺時間<select id="sprint-mode"><option value="fixed" ${sprintMode === 'fixed' ? 'selected' : ''}>固定秒數</option><option value="multiply" ${sprintMode === 'multiply' ? 'selected' : ''}>第一名用時 ×</option></select><input id="sprint-value" type="text" inputmode="decimal" maxlength="6" value="${sprintValue}" /><small>${sprintMode === 'multiply' ? '倍數 0.1 – 9999' : '1 – 9999 秒'}</small></label>`
       : `<p class="sprint-setting readonly">最後衝刺：<b>${sprintMode === 'multiply' ? `第一名用時 × ${room.sprintFactor}` : `${room.sprintSeconds} 秒`}</b></p>`
     : '';
-  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; return `<button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span><strong>${escapeHtml(player.name)}${player.id === state.visitorId ? '（你）' : ''}</strong><small class="player-progress">${status}</small></button>`; }).join('')}</div>${roleToggle}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? '<button class="primary wide" id="start-room">開始這局</button>' : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>${replay}` : ''}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+  const leaderboard = room.leaderboard?.length
+    ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3><ol>${room.leaderboard.map(row => `<li><strong>${escapeHtml(row.name)}</strong><span>${(row.ms / 1000).toFixed(1)}s · ${row.wins} 勝 · 第 ${row.round} 局</span></li>`).join('')}</ol></div>`
+    : '<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3><p class="empty">完成一局後，最快紀錄會出現在這裡。</p></div>';
+  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; return `<button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span><strong>${escapeHtml(player.name)}${player.id === state.visitorId ? '（你）' : ''}</strong><small class="player-progress">${status}</small></button>`; }).join('')}</div>${roleToggle}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? '<button class="primary wide" id="start-room">開始這局</button>' : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>${replay}` : ''}${leaderboard}${exportMap}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
 }
 function renderChatPanel() {
   return `<aside class="chat-panel"><div><p class="eyebrow">ROOM CHAT</p><h2>房間聊天</h2></div><div class="chat-log" id="chat-log"></div><form class="chat-form" id="chat-form"><textarea id="chat-input" rows="1" maxlength="200" placeholder="跟大家說點什麼…"></textarea><button class="primary" type="submit">送出</button></form><small class="chat-notice" id="chat-notice"></small></aside>`;
@@ -216,6 +264,22 @@ function sendChat() {
     if (result?.error) return chatNotice(result.error);
     if (input.value.trim() === text) input.value = '';
   });
+}
+// Keep in sync with formatBoardText in puzzle.js.
+function formatPuzzleText(puzzle) {
+  const rows = [];
+  for (let row = 0; row < puzzle.size; row++) rows.push(puzzle.regions.slice(row * puzzle.size, (row + 1) * puzzle.size).map(region => region + 1).join(' '));
+  rows.push(puzzle.solution.map(cat => cat.col + 1).join(' '));
+  return rows.join('\n');
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  const area = document.createElement('textarea');
+  area.value = text; area.setAttribute('readonly', ''); area.style.position = 'fixed'; area.style.opacity = '0';
+  document.body.append(area); area.select();
+  let copied = false;
+  try { copied = document.execCommand('copy'); } catch {}
+  area.remove(); return copied;
 }
 // One DOM node per message: chatter never triggers a board re-render.
 function appendChatMessage(message) {
@@ -329,9 +393,9 @@ async function showMultiplayer() {
   const roomList = publicRooms.length
     ? publicRooms.map(room => `<button class="public-room" data-public-room="${room.code}"><span class="public-room-icon">${room.status === 'lobby' ? '♟' : '◉'}</span><span><strong>${escapeHtml(room.name)}</strong><small>${room.size} × ${room.size} · ${room.players} 位玩家${room.spectators ? ` · ${room.spectators} 位觀戰` : ''}</small></span><b>${room.status === 'lobby' ? '快速加入 →' : '觀戰 →'}</b></button>`).join('')
     : '<p class="empty public-empty">目前沒有公開房間。開一間讓大家加入吧！</p>';
-  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option></select></label><label>最後衝刺秒數<input name="sprintSeconds" type="text" inputmode="numeric" maxlength="4" value="60" /></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section>`;
+  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label><label>最後衝刺秒數<input name="sprintSeconds" type="text" inputmode="numeric" maxlength="4" value="60" /></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section>`;
   document.querySelector('#back').onclick = home;
-  document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target); socket.emit('create-room', { name: playerName(), playerId: state.visitorId, roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => result.error ? alert(result.error) : null); };
+  document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target), button = event.target.querySelector('button[type="submit"], button'), label = button.textContent; button.disabled = true; button.textContent = '建立中…'; socket.emit('create-room', { name: playerName(), playerId: state.visitorId, roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); };
   document.querySelector('#join-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target); socket.emit('join-room', { code: form.get('code'), name: playerName(), playerId: state.visitorId, spectator: form.has('spectator') }, result => { if (result.error) alert(result.error); }); };
   document.querySelector('#refresh-rooms').onclick = showMultiplayer;
   document.querySelectorAll('[data-public-room]').forEach(button => button.addEventListener('click', () => socket.emit('join-room', { code: button.dataset.publicRoom, name: playerName(), playerId: state.visitorId, spectator: false }, result => { if (result.error) alert(result.error); })));
@@ -339,8 +403,9 @@ async function showMultiplayer() {
 function bindRoomButtons() {
   document.querySelector('#start-room')?.addEventListener('click', () => socket.emit('start-game', { code: state.room.code, playerId: state.visitorId }, result => result?.error && alert(result.error)));
   document.querySelector('#copy-room')?.addEventListener('click', async () => { await navigator.clipboard.writeText(state.room.code); const button = document.querySelector('#copy-room'); button.textContent = '已複製！'; setTimeout(() => button.textContent = `複製房間碼 ${state.room.code}`, 1200); });
+  document.querySelector('#copy-map')?.addEventListener('click', async event => { const button = event.currentTarget, message = document.querySelector('#map-copy-message'), copied = await copyText(formatPuzzleText(state.room.puzzle)); button.textContent = copied ? '已複製地圖！' : '複製失敗'; if (message) message.textContent = copied ? '' : '複製失敗，請手動複製地圖。'; if (copied) setTimeout(() => { if (button.isConnected) button.textContent = '複製地圖'; }, 1200); });
   document.querySelectorAll('[data-watch]').forEach(button => button.addEventListener('click', () => { state.watchingPlayerId = button.dataset.watch; renderGame(); }));
-  document.querySelector('#restart-room')?.addEventListener('click', () => socket.emit('restart-room', { code: state.room.code, playerId: state.visitorId }, result => result?.error && alert(result.error)));
+  document.querySelector('#restart-room')?.addEventListener('click', event => { const button = event.currentTarget, label = button.textContent; button.disabled = true; button.textContent = '準備中…'; socket.emit('restart-room', { code: state.room.code, playerId: state.visitorId }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); });
   document.querySelector('#role-toggle')?.addEventListener('click', () => socket.emit('set-lobby-role', { code: state.room.code, playerId: state.visitorId, spectator: !state.room.players.find(player => player.id === state.visitorId)?.spectator }, result => result?.error && alert(result.error)));
   document.querySelector('#sprint-mode')?.addEventListener('change', event => { const mode = event.target.value; socket.emit('set-sprint-setting', { code: state.room.code, playerId: state.visitorId, mode, value: mode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds }, result => result?.error && alert(result.error)); });
   document.querySelector('#sprint-value')?.addEventListener('input', event => { const mode = document.querySelector('#sprint-mode')?.value; event.target.value = mode === 'multiply' ? event.target.value.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1') : event.target.value.replace(/\D/g, ''); });

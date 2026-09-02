@@ -10,7 +10,7 @@
 const { rate } = require('./difficulty');
 
 // Bumping the version rebuilds the ladder on the next boot.
-const LADDER_VERSION = 1;
+const LADDER_VERSION = 2;
 const LADDER_LENGTH = 48;
 // The band ends were picked from the score distribution: a 5 × 5 bottoms out
 // around 11 and 10 × 10 boards reach ~230 at p90, so a 22 → 230 sweep spans
@@ -18,7 +18,9 @@ const LADDER_LENGTH = 48;
 // have a long tail, so the top rungs land wherever the tail allows — the target
 // is a guide, monotonicity is the guarantee.
 const FIRST_TARGET = 22, LAST_TARGET = 230;
-const TRIES_PER_ROUND = 150;
+function triesPerRound(size) {
+  return size <= 8 ? 150 : size <= 10 ? 40 : 15;
+}
 const FLAVOURS = ['曬太陽的午後', '滾來滾去的毛球', '謎樣的貓腳印', '深夜的貓步', '傳說中的貓王'];
 
 function rung(index, round = 0, previous = 0) {
@@ -30,7 +32,7 @@ function rung(index, round = 0, previous = 0) {
     target: Math.round(target),
     lo: Math.max(previous + 1, Math.round(target * (0.8 - 0.15 * round))),
     hi: Math.max(previous + 1, Math.round(target * (1.25 + 0.45 * round))),
-    sizes: fraction < 0.12 ? [5, 6] : fraction < 0.3 ? [6, 7] : fraction < 0.55 ? [7, 8] : fraction < 0.8 ? [8, 9] : [9, 10]
+    sizes: fraction < 0.12 ? [5, 6] : fraction < 0.3 ? [6, 7] : fraction < 0.5 ? [7, 8] : fraction < 0.7 ? [8, 9] : fraction < 0.85 ? [9, 10] : [11, 12]
   };
 }
 function ratingOf(puzzle) {
@@ -65,12 +67,13 @@ function buildLadder({ levels, generate, makeId, paused, onAccepted, onDone, onP
     onAccepted?.(level);
     setImmediate(tick);
   };
-  const tick = () => {
+  const tick = async () => {
     if (index >= LADDER_LENGTH) return onDone?.(levels);
     if (paused?.()) return setTimeout(tick, 1000);
     const band = rung(index, round, previous);
+    const size = band.sizes[tries % band.sizes.length];
     let puzzle;
-    try { puzzle = generate(band.sizes[tries % band.sizes.length]); } catch { return setImmediate(tick); }
+    try { puzzle = await generate(size); } catch { return setImmediate(tick); }
     tries++;
     const rating = ratingOf(puzzle);
     // The ceiling matters as much as the floor: accepting a wild outlier from
@@ -80,7 +83,7 @@ function buildLadder({ levels, generate, makeId, paused, onAccepted, onDone, onP
       if (rating.score >= band.lo) return accept(puzzle, rating);
       if (!best || rating.score > best.rating.score) best = { puzzle, rating };
     }
-    if (tries >= TRIES_PER_ROUND) {
+    if (tries >= triesPerRound(size)) {
       if (best) return accept(best.puzzle, best.rating);
       round++; tries = 0; onProgress?.({ index, round });
     }

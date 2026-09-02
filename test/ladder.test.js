@@ -23,7 +23,7 @@ test('the target band climbs and never sinks below the rung underneath', () => {
     const band = rung(index, 0, previous);
     assert.ok(band.lo > previous, `rung ${index} floor ${band.lo} must beat ${previous}`);
     assert.ok(band.hi >= band.lo);
-    assert.ok(band.sizes.every(size => size >= 5 && size <= 10));
+    assert.ok(band.sizes.every(size => size >= 5 && size <= 12));
     previous = band.target;
   }
   assert.ok(rung(0).target < rung(LADDER_LENGTH - 1).target);

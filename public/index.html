@@ -15,7 +15,7 @@
     <header class="topbar">
       <button id="home-button" class="brand" aria-label="返回首頁"><span>◒</span> MeowDoku</button>
       <div class="player-name"><label for="player-name">玩家</label><input id="player-name" maxlength="20" placeholder="輸入暱稱" /></div>
-      <button id="admin-button" class="quiet-button">管理關卡</button><button id="mute-button" class="quiet-button" aria-label="音效開關">🔊</button>
+      <button id="theme-button" class="quiet-button">外觀</button><button id="admin-button" class="quiet-button">管理關卡</button><button id="mute-button" class="quiet-button" aria-label="音效開關">🔊</button>
     </header>
     <section id="view" aria-live="polite"></section>
   </main>
@@ -25,9 +25,20 @@
       <p class="eyebrow">ADMIN STUDIO</p><h2>建立單人關卡</h2>
       <label>管理密鑰<input id="admin-key" type="password" required /></label>
       <label>關卡名稱<input id="level-name" maxlength="40" placeholder="例如：午後曬太陽" required /></label>
-      <label>地圖尺寸<select id="level-size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option></select></label>
+      <label>地圖尺寸<select id="level-size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label>
       <button class="primary" id="publish-level" value="default">產生並發布唯一解關卡</button>
+      <section class="admin-import"><p class="eyebrow">MAP IMPORT</p><h3>匯入地圖</h3><p class="hint">地圖名稱沿用上方欄位</p><textarea id="map-text" rows="8" placeholder="貼上地圖文字"></textarea><button type="button" class="primary" id="import-level">匯入地圖</button></section>
       <p id="admin-message" class="message"></p>
+    </form>
+  </dialog>
+  <dialog id="theme-dialog">
+    <form id="theme-form" method="dialog" class="dialog-card">
+      <button type="button" class="close" aria-label="關閉">×</button>
+      <p class="eyebrow">APPEARANCE</p><h2>自訂顏色</h2>
+      <fieldset class="theme-colors"><legend>區域顏色（N × N 會使用前 N 種）</legend><label>顏色 1<input type="color" data-theme-palette="0" /></label><label>顏色 2<input type="color" data-theme-palette="1" /></label><label>顏色 3<input type="color" data-theme-palette="2" /></label><label>顏色 4<input type="color" data-theme-palette="3" /></label><label>顏色 5<input type="color" data-theme-palette="4" /></label><label>顏色 6<input type="color" data-theme-palette="5" /></label><label>顏色 7<input type="color" data-theme-palette="6" /></label><label>顏色 8<input type="color" data-theme-palette="7" /></label><label>顏色 9<input type="color" data-theme-palette="8" /></label><label>顏色 10<input type="color" data-theme-palette="9" /></label><label>顏色 11<input type="color" data-theme-palette="10" /></label><label>顏色 12<input type="color" data-theme-palette="11" /></label></fieldset>
+      <label>棋盤格線顏色<input type="color" data-theme-key="boardLine" /></label>
+      <label>頁面背景顏色<input type="color" data-theme-key="paper" /></label>
+      <button type="button" class="link-button" id="reset-theme">重設</button>
     </form>
   </dialog>
   <script src="/socket.io/socket.io.js"></script><script src="/sfx.js"></script><script src="/app.js"></script>

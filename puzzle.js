@@ -1,7 +1,7 @@
 'use strict';
 
 const MIN_SIZE = 4;
-const MAX_SIZE = 10;
+const MAX_SIZE = 12;
 // A board that still has extra answers after this many repairs is thrown away:
 // a fresh board is cheaper than pushing a stubborn one further.
 const REPAIR_BUDGET_PER_CELL = 1;
@@ -215,4 +215,63 @@ function generatePuzzle(size = 7) {
   throw new Error('無法產生唯一解關卡');
 }
 
-module.exports = { generatePuzzle, countSolutions, findSolutions, clampSize, MIN_SIZE, MAX_SIZE };
+function parseBoardText(text) {
+  if (typeof text !== 'string') throw new Error('地圖文字必須是文字格式。');
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (lines.length < MIN_SIZE + 1 || lines.length > MAX_SIZE + 1) {
+    throw new Error(`地圖需要 ${MIN_SIZE + 1} 至 ${MAX_SIZE + 1} 行非空文字。`);
+  }
+  const size = lines.length - 1;
+  function values(line, lineNumber) {
+    const compact = line.match(/^\d+$/);
+    const parts = compact && size <= 9 ? [...line] : line.split(/[ \t]+/);
+    if (parts.length !== size) throw new Error(`第 ${lineNumber} 行必須有 ${size} 個數值。`);
+    if (!parts.every(part => /^\d+$/.test(part))) throw new Error(`第 ${lineNumber} 行包含無效的整數。`);
+    return parts.map(Number);
+  }
+  const grid = lines.slice(0, size).map((line, index) => values(line, index + 1));
+  const answer = values(lines[size], size + 1);
+  for (const row of grid) for (const region of row) {
+    if (region < 1 || region > size) throw new Error(`區域編號必須介於 1 和 ${size} 之間。`);
+  }
+  const regions = grid.flat().map(region => region - 1);
+  const used = new Set(regions);
+  if (used.size !== size) throw new Error('地圖必須使用每一個區域編號，不能跳號。');
+  for (let region = 0; region < size; region++) {
+    const start = regions.indexOf(region), seen = new Set([start]), queue = [start];
+    while (queue.length) for (const next of neighbors(queue.pop(), size)) {
+      if (regions[next] !== region || seen.has(next)) continue;
+      seen.add(next); queue.push(next);
+    }
+    if (seen.size !== regions.filter(value => value === region).length) throw new Error(`區域 ${region + 1} 必須是正交連通的。`);
+  }
+  if (new Set(answer).size !== size || answer.some(column => column < 1 || column > size)) {
+    throw new Error(`答案必須是 1 到 ${size} 的不重複排列。`);
+  }
+  const solution = answer.map((column, row) => ({ row, col: column - 1 }));
+  const regionCounts = new Uint8Array(size);
+  for (let row = 0; row < size; row++) {
+    const col = solution[row].col;
+    regionCounts[regions[row * size + col]]++;
+    for (const [dr, dc] of [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]]) {
+      const nextRow = row + dr, nextCol = col + dc;
+      if (nextRow >= 0 && nextRow < size && nextCol >= 0 && nextCol < size && solution[nextRow].col === nextCol) {
+        throw new Error('答案中的貓咪不能在八方向相鄰。');
+      }
+    }
+  }
+  if (regionCounts.some(count => count !== 1)) throw new Error('答案必須在每個區域各放一隻貓。');
+  const solutions = countSolutions(regions, size, 2);
+  if (!solutions) throw new Error('地圖規則互相矛盾，沒有可行答案。');
+  if (solutions > 1) throw new Error('地圖不唯一，存在兩組以上可行答案。');
+  return { size, regions, solution };
+}
+// Keep in sync with formatPuzzleText in public/app.js.
+function formatBoardText(puzzle) {
+  const rows = [];
+  for (let row = 0; row < puzzle.size; row++) rows.push(puzzle.regions.slice(row * puzzle.size, (row + 1) * puzzle.size).map(region => region + 1).join(' '));
+  rows.push(puzzle.solution.map(cat => cat.col + 1).join(' '));
+  return rows.join('\n');
+}
+
+module.exports = { generatePuzzle, countSolutions, findSolutions, clampSize, MIN_SIZE, MAX_SIZE, parseBoardText, formatBoardText };
