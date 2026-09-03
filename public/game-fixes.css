@@ -28,7 +28,7 @@
 /* The stroke keeps the cross readable on the lighter regions too. */
 .cell.mark { color: #fff; font-size: clamp(25px, 4.5vw, 46px); -webkit-text-stroke: 2px rgba(0, 0, 0, .34); paint-order: stroke fill; text-shadow: 0 1px 3px rgba(0, 0, 0, .4); }
 /* Light on a saturated board, so a mistake stands out whatever the region colour is. */
-.cell.wrong { color: #b01a24; background: linear-gradient(155deg, #fff3f3, #ffd9d9); font-size: clamp(28px, 5vw, 52px); box-shadow: inset 0 0 0 3px #b01a24; text-shadow: none; }
+.cell.wrong { color: #b01a24; /*background: linear-gradient(155deg, #fff3f3, #ffd9d9);*/ font-size: clamp(28px, 5vw, 52px); box-shadow: inset 0 0 0 3px #b01a24; text-shadow: none; }
 /* A tap in a room is answered by the server, so the cell acknowledges it right away. */
 .cell.pending { box-shadow: inset 0 0 0 3px rgba(255, 255, 255, .8); animation: cell-pending .9s ease-in-out infinite; }
 @keyframes cell-pending { 50% { opacity: .62; } }
