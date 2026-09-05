@@ -6,12 +6,17 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check public/app.js && node --check public/sfx.js && node --check sprint.js && node --check test/sprint.test.js && node --check difficulty.js && node --check ladder.js && node --check generator.js && node --check puzzle-worker.js && node --check puzzle.js",
+    "check": "node --check server.js && node --check public/app.js && node --check public/sfx.js && node --check sprint.js && node --check test/sprint.test.js && node --check difficulty.js && node --check ladder.js && node --check generator.js && node --check puzzle-worker.js && node --check puzzle.js && node --check db.js && node --check auth.js && node --check test/auth.test.js",
     "test": "node --test test/"
   },
   "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "cookie": "^1.1.1",
     "express": "^4.21.2",
     "nanoid": "^3.3.8",
     "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.1"
   }
 }

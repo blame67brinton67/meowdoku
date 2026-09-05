@@ -14,3 +14,7 @@ dialog { width:min(440px,calc(100% - 30px));border:0;padding:0;background:transp
 .room-leaderboard li { display:flex; justify-content:space-between; gap:8px; padding:7px 0; border-bottom:1px solid rgba(32,34,42,.1); font-size:12px; }
 .room-leaderboard li:last-child { border-bottom:0; }
 .room-leaderboard li span { color:var(--muted); text-align:right; }
+.account{display:inline-flex;align-items:center;gap:8px;font-size:.9rem}
+.auth-tabs{display:flex;gap:6px;margin-bottom:14px}
+.auth-tab{flex:1;padding:8px;border:1px solid var(--board-line,#c7cad1);border-radius:999px;background:transparent;cursor:pointer;font:inherit}
+.auth-tab.active{background:var(--ink,#222);color:var(--paper,#fff);border-color:transparent}

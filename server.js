@@ -4,6 +4,9 @@ const { Server } = require('socket.io');
 const { nanoid } = require('nanoid');
 const fs = require('fs');
 const path = require('path');
+const cookie = require('cookie');
+const { openDb } = require('./db');
+const { createAuth } = require('./auth');
 const { generatePuzzle, countSolutions, clampSize, parseBoardText } = require('./puzzle');
 const { generateAsync } = require('./generator');
 const { clampSprintSeconds, clampSprintFactor, normalizeSprintMode, resolveSprintSeconds } = require('./sprint');
@@ -14,11 +17,13 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 const PORT = Number(process.env.PORT || 3000);
-const ADMIN_KEY = process.env.ADMIN_KEY || 'meowdoku-admin';
 const IDLE_GRACE = 20_000;
 const CHAT_MAX_LEN = 200, CHAT_HISTORY = 50, CHAT_WINDOW = 5_000, CHAT_WINDOW_MAX = 5, CHAT_MIN_GAP = 400;
 const ALL_SPECTATOR_CLOSE = 10 * 60_000;
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = process.env.MEOWDOKU_DATA_DIR || path.join(__dirname, 'data');
+const DB_PATH = path.join(DATA_DIR, 'meowdoku.db');
+const SESSION_COOKIE = 'meowdoku_sid';
+const SESSION_MAX_AGE = 30 * 24 * 60 * 60;
 const LEVELS_PATH = path.join(DATA_DIR, 'levels.json');
 const SCORES_PATH = path.join(DATA_DIR, 'scores.json');
 const PUZZLE_POOL_PATH = path.join(DATA_DIR, 'multiplayer-puzzle-pool.json');
@@ -31,8 +36,54 @@ const LADDER_PATH = path.join(DATA_DIR, 'ladder.json');
 const rooms = new Map();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
+const db = openDb(DB_PATH);
+const auth = createAuth(db);
+auth.purgeExpired();
+if (process.env.ADMIN_BOOTSTRAP_USER) {
+  if (auth.bootstrapAdmin(process.env.ADMIN_BOOTSTRAP_USER)) console.log(`已將 ${process.env.ADMIN_BOOTSTRAP_USER} 設為管理員`);
+  else console.log(`ADMIN_BOOTSTRAP_USER=${process.env.ADMIN_BOOTSTRAP_USER} 尚未註冊，請先在網頁註冊該帳號再重啟`);
+}
+// ngrok and similar tunnels run on this machine, so only loopback proxies get
+// to tell us the client address and protocol.
+app.set('trust proxy', 'loopback');
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+const isSecure = req => req.secure || req.header('x-forwarded-proto') === 'https';
+function setSessionCookie(req, res, token, persistent) {
+  res.append('Set-Cookie', cookie.serialize(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', path: '/', secure: isSecure(req), ...(persistent ? { maxAge: SESSION_MAX_AGE } : {}) }));
+}
+function clearSessionCookie(req, res) {
+  res.append('Set-Cookie', cookie.serialize(SESSION_COOKIE, '', { httpOnly: true, sameSite: 'lax', path: '/', secure: isSecure(req), maxAge: 0 }));
+}
+const cookieToken = header => cookie.parse(header || '')[SESSION_COOKIE];
+// Every API caller has an identity: a logged-in user, or a guest minted on the
+// spot whose cookie lives only as long as the browser session.
+app.use('/api', (req, res, next) => {
+  req.sessionToken = cookieToken(req.header('cookie'));
+  const resolved = auth.resolve(req.sessionToken, req.header('user-agent'));
+  if (resolved) {
+    req.identity = resolved.identity;
+    if (resolved.renewedToken) { req.sessionToken = resolved.renewedToken; setSessionCookie(req, res, resolved.renewedToken, true); }
+    return next();
+  }
+  const guest = auth.createGuest(req.header('user-agent'));
+  req.identity = guest.identity; req.sessionToken = guest.token;
+  setSessionCookie(req, res, guest.token, false);
+  next();
+});
+const isUser = req => req.identity.kind === 'user';
+const GUEST_ONLY = '這個功能需要登入帳號；訪客資料在關閉網頁後不會保留。';
+function requireUser(req, res, next) {
+  if (!isUser(req)) return res.status(401).json({ error: GUEST_ONLY });
+  next();
+}
+function requireAdmin(req, res, next) {
+  if (!isUser(req)) return res.status(401).json({ error: '請先登入管理員帳號' });
+  if (!req.identity.isAdmin) return res.status(403).json({ error: '只有管理員可以管理關卡' });
+  next();
+}
+setInterval(() => auth.purgeExpired(), 60 * 60_000).unref();
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -116,10 +167,68 @@ async function takeMultiplayerPuzzle(size) {
   return puzzle;
 }
 function scoreRows() {
-  const scores = readJson(SCORES_PATH, {});
-  return Object.values(scores).sort((a, b) => b.cleared.length - a.cleared.length || a.name.localeCompare(b.name, 'zh-Hant'))
-    .map(({ name, cleared }) => ({ name, cleared: cleared.length }));
+  const guests = Object.values(readJson(SCORES_PATH, {})).map(({ name, cleared }) => ({ name, cleared: cleared.length }));
+  return [...auth.userLeaderboard(), ...guests].sort((a, b) => b.cleared - a.cleared || a.name.localeCompare(b.name, 'zh-Hant'));
 }
+function clearedFor(identity) {
+  if (identity.kind === 'user') return auth.clearedLevels(identity.id);
+  return readJson(SCORES_PATH, {})[identity.id]?.cleared || [];
+}
+function historyFor(identity) {
+  if (identity.kind === 'user') return auth.matchHistory(identity.id, HISTORY_PER_VISITOR);
+  return readJson(HISTORY_PATH, {})[identity.id] || [];
+}
+function publicIdentity(identity) {
+  return identity.kind === 'user'
+    ? { user: { id: identity.id, username: identity.username, displayName: identity.displayName, isAdmin: identity.isAdmin, avatar: identity.avatar, frame: identity.frame }, guest: null }
+    : { user: null, guest: { id: identity.id, ephemeral: true, notice: '訪客資料在關閉網頁後不會保留，登入才能永久保存。' } };
+}
+// A guest who signs in keeps what they just played: the guest identity came
+// from our own cookie, so it can be merged without asking.
+function absorbGuest(identity, userId) {
+  if (identity.kind !== 'guest') return;
+  const scores = readJson(SCORES_PATH, {}), history = readJson(HISTORY_PATH, {});
+  auth.claimVisitor(userId, identity.id, { cleared: scores[identity.id]?.cleared || [], history: history[identity.id] || [] });
+  if (identity.id in scores) { delete scores[identity.id]; writeJson(SCORES_PATH, scores); }
+  if (identity.id in history) { delete history[identity.id]; writeJson(HISTORY_PATH, history); }
+  auth.deleteGuestSessions(identity.id);
+}
+
+app.get('/api/auth/me', (req, res) => res.json(publicIdentity(req.identity)));
+app.post('/api/auth/register', async (req, res) => {
+  if (isUser(req)) return res.status(400).json({ error: '你已經登入了' });
+  const { username, password } = req.body || {};
+  const result = await auth.register({ username, password, userAgent: req.header('user-agent') });
+  if (result.error) return res.status(400).json({ error: result.error });
+  absorbGuest(req.identity, result.user.id);
+  setSessionCookie(req, res, result.token, true);
+  res.status(201).json({ user: result.user });
+});
+app.post('/api/auth/login', async (req, res) => {
+  if (isUser(req)) return res.status(400).json({ error: '你已經登入了' });
+  const { username, password } = req.body || {};
+  const result = await auth.login({ username, password, ip: req.ip, userAgent: req.header('user-agent') });
+  if (result.retryAfter) { res.set('Retry-After', String(result.retryAfter)); return res.status(429).json({ error: result.error, retryAfter: result.retryAfter }); }
+  if (result.error) return res.status(401).json({ error: result.error });
+  absorbGuest(req.identity, result.user.id);
+  setSessionCookie(req, res, result.token, true);
+  res.json({ user: result.user });
+});
+app.post('/api/auth/logout', (req, res) => {
+  auth.logout(req.sessionToken);
+  clearSessionCookie(req, res);
+  res.json({ ok: true });
+});
+app.post('/api/auth/claim-progress', requireUser, (req, res) => {
+  const visitorId = String(req.body?.visitorId || '');
+  if (!VISITOR_ID.test(visitorId)) return res.status(400).json({ error: '無效的玩家識別碼' });
+  const scores = readJson(SCORES_PATH, {}), history = readJson(HISTORY_PATH, {});
+  const claimed = auth.claimVisitor(req.identity.id, visitorId, { cleared: scores[visitorId]?.cleared || [], history: history[visitorId] || [] });
+  if (!claimed) return res.status(409).json({ error: '這份進度已經被認領過了' });
+  if (visitorId in scores) { delete scores[visitorId]; writeJson(SCORES_PATH, scores); }
+  if (visitorId in history) { delete history[visitorId]; writeJson(HISTORY_PATH, history); }
+  res.json({ ok: true, cleared: auth.clearedLevels(req.identity.id) });
+});
 
 app.get('/api/levels', (_req, res) => res.json(singleLevels().map(publicLevel)));
 app.get('/api/levels/:id', (req, res) => {
@@ -138,6 +247,10 @@ app.get('/api/public-rooms', (_req, res) => {
     }));
   res.json(visibleRooms);
 });
+app.get('/api/progress/me', (req, res) => res.json({ cleared: clearedFor(req.identity) }));
+app.get('/api/history/me', (req, res) => res.json(historyFor(req.identity)));
+// Legacy read-only paths keyed by the browser-generated visitorId, kept so an
+// unclaimed guest history can still be looked at before it is claimed.
 app.get('/api/progress/:visitorId', (req, res) => {
   const scores = readJson(SCORES_PATH, {});
   const entry = scores[req.params.visitorId];
@@ -149,23 +262,27 @@ app.get('/api/history/:visitorId', (req, res) => {
   res.json(readJson(HISTORY_PATH, {})[visitorId] || []);
 });
 app.post('/api/single-complete', (req, res) => {
-  const { visitorId, name, levelId } = req.body || {};
+  const { name, levelId } = req.body || {};
   const list = singleLevels();
   const levelIndex = list.findIndex(level => level.id === levelId);
-  if (!visitorId || !name || levelIndex < 0) return res.status(400).json({ error: '資料不完整' });
-  const scores = readJson(SCORES_PATH, {});
-  const entry = scores[visitorId] || { name: String(name).slice(0, 20), cleared: [] };
-  entry.name = String(name).slice(0, 20);
+  if (!name || levelIndex < 0) return res.status(400).json({ error: '資料不完整' });
+  const cleared = clearedFor(req.identity);
   // Replaying something already cleared stays allowed even when a newly rated
   // level has since sorted in between it and the rung below.
-  if (levelIndex > 0 && !entry.cleared.includes(levelId) && !entry.cleared.includes(list[levelIndex - 1].id)) return res.status(403).json({ error: '請先完成前一關' });
+  if (levelIndex > 0 && !cleared.includes(levelId) && !cleared.includes(list[levelIndex - 1].id)) return res.status(403).json({ error: '請先完成前一關' });
+  if (isUser(req)) {
+    auth.clearLevel(req.identity.id, levelId);
+    return res.json({ ok: true, cleared: auth.clearedLevels(req.identity.id).length });
+  }
+  const scores = readJson(SCORES_PATH, {});
+  const entry = scores[req.identity.id] || { name: '', cleared: [] };
+  entry.name = String(name).slice(0, 20);
   if (!entry.cleared.includes(levelId)) entry.cleared.push(levelId);
-  scores[visitorId] = entry;
+  scores[req.identity.id] = entry;
   writeJson(SCORES_PATH, scores);
   res.json({ ok: true, cleared: entry.cleared.length });
 });
-app.post('/api/admin/levels', async (req, res) => {
-  if (req.header('x-admin-key') !== ADMIN_KEY) return res.status(401).json({ error: '管理密鑰不正確' });
+app.post('/api/admin/levels', requireAdmin, async (req, res) => {
   try {
     const puzzle = await generateAsync(req.body?.size);
     const level = { id: nanoid(8), name: String(req.body?.name || `${puzzle.size} × ${puzzle.size} 新關卡`).slice(0, 40), createdAt: Date.now(), ...puzzle, rating: rate(puzzle) };
@@ -173,8 +290,7 @@ app.post('/api/admin/levels', async (req, res) => {
     res.status(201).json(publicLevel(level));
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
-app.post('/api/admin/levels/import', (req, res) => {
-  if (req.header('x-admin-key') !== ADMIN_KEY) return res.status(401).json({ error: '管理密鑰不正確' });
+app.post('/api/admin/levels/import', requireAdmin, (req, res) => {
   const text = req.body?.text;
   if (typeof text !== 'string') return res.status(400).json({ error: '地圖文字必須是文字格式。' });
   if (text.length > 8192) return res.status(400).json({ error: '地圖文字不得超過 8 KB。' });
@@ -260,7 +376,8 @@ function orderedResults(room) {
     .map((p, index) => ({ rank: index + 1, name: p.name, time: ((p.completedAt - room.startedAt) / 1000).toFixed(1) }));
 }
 // One record per racer, once per match, so a lost race can still be worked out
-// afterwards. Both the per-visitor list and the visitor count are capped.
+// afterwards. Accounts keep theirs in the database; guests go to the JSON file,
+// where both the per-visitor list and the visitor count are capped.
 function recordMatchHistory(room) {
   const participants = racers(room);
   if (!participants.length) return;
@@ -269,6 +386,7 @@ function recordMatchHistory(room) {
   const shared = { matchId: nanoid(10), code: room.code, roomName: room.name, finishedAt: Date.now(),
     size: room.puzzle.size, regions: room.puzzle.regions, solution: room.puzzle.solution, results };
   const history = readJson(HISTORY_PATH, {});
+  let guestsTouched = false;
   for (const player of participants) {
     if (!VISITOR_ID.test(String(player.id || ''))) continue;
     const record = { ...shared, outcome: {
@@ -277,8 +395,11 @@ function recordMatchHistory(room) {
       time: player.completedAt ? ((player.completedAt - room.startedAt) / 1000).toFixed(1) : null,
       cats: player.found.size, wrong: [...player.wrong]
     } };
+    if (player.kind === 'user') { auth.recordMatch(player.id, record); continue; }
+    guestsTouched = true;
     history[player.id] = [record, ...(history[player.id] || [])].slice(0, HISTORY_PER_VISITOR);
   }
+  if (!guestsTouched) return;
   const visitors = Object.keys(history);
   if (visitors.length > HISTORY_VISITORS) {
     const keep = visitors.sort((a, b) => (history[b][0]?.finishedAt || 0) - (history[a][0]?.finishedAt || 0)).slice(0, HISTORY_VISITORS);
@@ -297,8 +418,17 @@ function allPlayersResolved(room) {
   return racers.length > 0 && racers.every(player => player.completedAt || !player.alive);
 }
 
+// The handshake carries the same cookie as the API, so the socket's identity
+// is settled once here and every event below ignores any id in its payload.
+io.use((socket, next) => {
+  const resolved = auth.resolve(cookieToken(socket.request.headers.cookie), socket.request.headers['user-agent'], { renew: false });
+  if (!resolved) return next(new Error('身分已失效，請重新整理頁面'));
+  socket.data.identity = resolved.identity;
+  next();
+});
 io.on('connection', socket => {
-  socket.on('create-room', async ({ name, playerId, roomName, levelId, size, visibility, sprintMode, sprintSeconds, sprintFactor }, callback) => {
+  const playerId = socket.data.identity.id, kind = socket.data.identity.kind;
+  socket.on('create-room', async ({ name, roomName, levelId, size, visibility, sprintMode, sprintSeconds, sprintFactor } = {}, callback) => {
     let puzzle;
     try { puzzle = levelId ? singleLevels().find(level => level.id === levelId) : await takeMultiplayerPuzzle(size || 7); }
     catch (error) { return callback?.({ error: error.message }); }
@@ -309,16 +439,16 @@ io.on('connection', socket => {
       visibility: visibility === 'private' ? 'private' : 'public',
       players: new Map(), startedAt: null, deadline: null, timer: null, spectatorTimer: null,
       sprintMode: normalizeSprintMode(sprintMode, 'fixed'), sprintSeconds: clampSprintSeconds(sprintSeconds), sprintFactor: clampSprintFactor(sprintFactor), chat: [] };
-    rooms.set(code, room); joinRoom(socket, room, { name, playerId, spectator: false }); callback({ code });
+    rooms.set(code, room); joinRoom(socket, room, { name, playerId, kind, spectator: false }); callback({ code });
   });
-  socket.on('join-room', ({ code, name, playerId, spectator }, callback) => {
+  socket.on('join-room', ({ code, name, spectator } = {}, callback) => {
     const room = rooms.get(String(code || '').toUpperCase());
     if (!room) return callback({ error: '房間不存在或已關閉' });
     // A match's player roster locks as soon as its countdown begins.
-    joinRoom(socket, room, { name, playerId, spectator: Boolean(spectator) || room.status !== 'lobby' });
+    joinRoom(socket, room, { name, playerId, kind, spectator: Boolean(spectator) || room.status !== 'lobby' });
     callback({ ok: true, spectator: room.status !== 'lobby' || Boolean(spectator) });
   });
-  socket.on('start-game', ({ code, playerId }, callback) => {
+  socket.on('start-game', ({ code } = {}, callback) => {
     const room = rooms.get(code);
     if (!room || room.hostId !== playerId) return callback?.({ error: '只有房主可以開始' });
     if (room.status !== 'lobby') return callback?.({ error: '遊戲已開始' });
@@ -330,7 +460,7 @@ io.on('connection', socket => {
     }, 3000);
     callback?.({ ok: true });
   });
-  socket.on('guess', ({ code, playerId, row, col }, callback) => {
+  socket.on('guess', ({ code, row, col } = {}) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
     if (!room || !player || room.status !== 'playing' || player.spectator || !player.alive || player.completedAt) return;
     const hit = room.puzzle.solution.some(cat => cat.row === row && cat.col === col);
@@ -356,13 +486,13 @@ io.on('connection', socket => {
     }
     emitRoomSoon(room);
   });
-  socket.on('marks-update', ({ code, playerId, marks }) => {
+  socket.on('marks-update', ({ code, marks } = {}) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
     if (!room || !player || room.status !== 'playing' || player.spectator || !player.alive || !Array.isArray(marks)) return;
     player.marks = new Set(marks.filter(key => typeof key === 'string').slice(0, room.puzzle.size * room.puzzle.size));
     emitRoomSoon(room);
   });
-  socket.on('chat-message', ({ code, playerId, text }, callback) => {
+  socket.on('chat-message', ({ code, text } = {}, callback) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
     if (!room || !player || player.socketId !== socket.id) return callback?.({ error: '找不到房間成員' });
     const clean = String(text ?? '').replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, ' ').trim().slice(0, CHAT_MAX_LEN);
@@ -376,7 +506,7 @@ io.on('connection', socket => {
     io.to(room.code).emit('chat-message', message);
     callback?.({ ok: true });
   });
-  socket.on('set-lobby-role', ({ code, playerId, spectator }, callback) => {
+  socket.on('set-lobby-role', ({ code, spectator } = {}, callback) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
     if (!room || !player) return callback?.({ error: '找不到房間成員' });
     if (room.status !== 'lobby') return callback?.({ error: '倒數開始後不能再變更身分' });
@@ -384,7 +514,7 @@ io.on('connection', socket => {
     player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
     emitRoom(room); checkAllSpectator(room); callback?.({ ok: true });
   });
-  socket.on('set-sprint-setting', ({ code, playerId, mode, value }, callback) => {
+  socket.on('set-sprint-setting', ({ code, mode, value } = {}, callback) => {
     const room = rooms.get(code);
     if (!room || room.hostId !== playerId) return callback?.({ error: '只有房主可以調整最後衝刺時間' });
     if (room.status !== 'lobby') return callback?.({ error: '倒數開始後不能再調整最後衝刺時間' });
@@ -402,7 +532,7 @@ io.on('connection', socket => {
     room.sprintMode = nextMode;
     emitRoom(room); callback?.({ ok: true });
   });
-  socket.on('restart-room', async ({ code, playerId }, callback) => {
+  socket.on('restart-room', async ({ code } = {}, callback) => {
     const room = rooms.get(code);
     if (!room || room.hostId !== playerId) return callback?.({ error: '只有房主可以重新開始' });
     if (room.status !== 'finished') return callback?.({ error: '本局尚未結束' });
@@ -420,11 +550,11 @@ io.on('connection', socket => {
     } catch (error) { callback?.({ error: error.message }); }
     finally { room.restartPending = false; }
   });
-  socket.on('resume-room', ({ code, playerId, name }, callback) => {
+  socket.on('resume-room', ({ code, name } = {}, callback) => {
     const room = rooms.get(String(code || '').toUpperCase());
     if (!room) return callback?.({ error: '房間不存在或已關閉' });
     const player = room.players.get(playerId);
-    if (!player) { joinRoom(socket, room, { name, playerId, spectator: true }); return callback?.({ ok: true, spectator: true, movedToSpectator: true }); }
+    if (!player) { joinRoom(socket, room, { name, playerId, kind, spectator: true }); return callback?.({ ok: true, spectator: true, movedToSpectator: true }); }
     const wasIdle = player.idle;
     clearTimeout(player.idleTimer); player.idleTimer = null;
     player.socketId = socket.id; player.disconnectedAt = null; player.idle = false;
@@ -432,7 +562,7 @@ io.on('connection', socket => {
     if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
     callback?.({ ok: true, spectator: player.spectator, movedToSpectator: wasIdle && player.spectator });
   });
-  socket.on('leave-room', ({ code, playerId }, callback) => {
+  socket.on('leave-room', ({ code } = {}, callback) => {
     const room = rooms.get(code); const player = room?.players.get(playerId);
     callback?.({ ok: true });
     if (!room || !player) return;
@@ -455,11 +585,13 @@ io.on('connection', socket => {
     }
   });
 });
-function joinRoom(socket, room, { name, playerId, spectator }) {
+function joinRoom(socket, room, { name, playerId, kind, spectator }) {
   for (const existing of room.players.values()) if (existing.id === playerId) { clearTimeout(existing.idleTimer); room.players.delete(existing.id); }
-  const player = { id: playerId, name: String(name || '神秘貓奴').slice(0, 20), spectator, socketId: socket.id, idle: false, disconnectedAt: null, idleTimer: null, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
+  const player = { id: playerId, kind, name: String(name || '神秘貓奴').slice(0, 20), spectator, socketId: socket.id, idle: false, disconnectedAt: null, idleTimer: null, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
   room.players.set(playerId, player); socket.join(room.code); socket.emit('chat-backlog', room.chat); emitRoom(room); checkAllSpectator(room);
   if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
 }
 
-server.listen(PORT, () => { console.log(`MeowDoku is ready at http://localhost:${PORT}`); startLadder(); });
+if (require.main === module) server.listen(PORT, () => { console.log(`MeowDoku is ready at http://localhost:${PORT}`); startLadder(); });
+
+module.exports = { app, server, io, db, auth, rooms };

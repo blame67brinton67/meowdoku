@@ -1,13 +1,17 @@
 const view = document.querySelector('#view');
 const nameInput = document.querySelector('#player-name');
-const socket = io();
+// The socket handshake carries the identity cookie, so it only connects once
+// /api/auth/me has made sure that cookie exists.
+const socket = io({ autoConnect: false });
 const state = {
-  visitorId: localStorage.visitorId || crypto.randomUUID(),
+  // Server-issued identity; the id is what rooms and records are keyed by.
+  playerId: null, user: null, guest: null,
+  // Pre-account progress lives under this browser-generated id until claimed.
+  legacyVisitorId: localStorage.visitorId || null,
   name: localStorage.meowdokuName || '',
   mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false,
   touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: ''
 };
-localStorage.visitorId = state.visitorId;
 const anonymousTag = localStorage.meowdokuAnonTag || String(Math.floor(Math.random() * 9000) + 1000);
 localStorage.meowdokuAnonTag = anonymousTag;
 nameInput.value = state.name;
@@ -52,7 +56,7 @@ const escapeHtml = value => String(value).replace(/[&<>'"]/g, char => ({ '&':'&a
 // wherever a level is: stars for the feel, the technique for what to look for.
 const stars = rating => '★'.repeat(rating.stars) + '☆'.repeat(5 - rating.stars);
 const ratingLine = rating => rating ? `<span class="rating"><b>${stars(rating)}</b>${escapeHtml(rating.hardestName)} · ${rating.score} 分</span>` : '';
-const playerName = () => state.name || `神祕貓奴 #${anonymousTag}`;
+const playerName = () => state.name || state.user?.displayName || `神祕貓奴 #${anonymousTag}`;
 // Practice (upsolve) borrows the whole single-player board, only the scoring
 // and the wrong-click rule differ.
 const soloMode = () => state.mode === 'single' || state.mode === 'practice';
@@ -62,6 +66,55 @@ const outcomeLabel = outcome => outcome.status === 'solved' ? `第 ${outcome.ran
 document.querySelector('#home-button').addEventListener('click', home);
 document.querySelector('#admin-button').addEventListener('click', () => { document.querySelector('#admin-message').textContent = ''; document.querySelector('#admin-dialog').showModal(); });
 document.querySelector('#admin-dialog .close').addEventListener('click', () => document.querySelector('#admin-dialog').close());
+document.querySelector('#auth-button').addEventListener('click', () => { setAuthTab('login'); document.querySelector('#auth-message').textContent = ''; document.querySelector('#auth-dialog').showModal(); });
+document.querySelector('#auth-dialog .close').addEventListener('click', () => document.querySelector('#auth-dialog').close());
+document.querySelectorAll('[data-auth-tab]').forEach(button => button.addEventListener('click', () => setAuthTab(button.dataset.authTab)));
+function setAuthTab(tab) {
+  document.querySelectorAll('[data-auth-tab]').forEach(button => button.classList.toggle('active', button.dataset.authTab === tab));
+  document.querySelector('#auth-form').dataset.mode = tab;
+  document.querySelector('#auth-submit').textContent = tab === 'register' ? '註冊帳號' : '登入';
+  document.querySelector('#auth-username').focus();
+}
+// The top bar tells a guest what is at stake: nothing of theirs survives a
+// closed tab until they sign in.
+function renderAuth() {
+  const button = document.querySelector('#auth-button'), account = document.querySelector('#account');
+  const isUser = Boolean(state.user);
+  button.hidden = isUser; account.hidden = !isUser;
+  if (isUser) document.querySelector('#account-name').textContent = state.user.displayName;
+  document.querySelector('#admin-button').hidden = !state.user?.isAdmin;
+  document.querySelector('#guest-notice').textContent = state.guest?.notice || '';
+}
+async function loadIdentity() {
+  const me = await api('/api/auth/me');
+  state.user = me.user; state.guest = me.guest; state.playerId = me.user?.id || me.guest?.id || null;
+  renderAuth();
+}
+// Signing in swaps the identity cookie, so the socket and every cached view
+// start over from a reload.
+async function afterSignIn(user) {
+  state.user = user;
+  const visitorId = state.legacyVisitorId;
+  if (visitorId && !localStorage.meowdokuClaimed && confirm('要把這台瀏覽器之前的單人進度與對戰紀錄併入這個帳號嗎？（只能併入一次）')) {
+    try { await api('/api/auth/claim-progress', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ visitorId }) }); localStorage.meowdokuClaimed = '1'; }
+    catch (error) { if (/認領過/.test(error.message)) localStorage.meowdokuClaimed = '1'; else alert(error.message); }
+  }
+  window.location.reload();
+}
+document.querySelector('#auth-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget, mode = form.dataset.mode === 'register' ? 'register' : 'login', message = document.querySelector('#auth-message'), button = document.querySelector('#auth-submit');
+  button.disabled = true; message.textContent = mode === 'register' ? '正在建立帳號…' : '正在登入…';
+  try {
+    const { user } = await api(`/api/auth/${mode}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: document.querySelector('#auth-username').value.trim(), password: document.querySelector('#auth-password').value }) });
+    message.textContent = mode === 'register' ? '註冊成功！' : '登入成功！';
+    await afterSignIn(user);
+  } catch (error) { message.textContent = error.message; button.disabled = false; }
+});
+document.querySelector('#logout-button').addEventListener('click', async () => {
+  try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
+  window.location.reload();
+});
 document.querySelector('#theme-button').addEventListener('click', () => { syncThemeInputs(); document.querySelector('#theme-dialog').showModal(); });
 document.querySelector('#theme-dialog .close').addEventListener('click', () => document.querySelector('#theme-dialog').close());
 document.querySelectorAll('[data-theme-palette]').forEach(input => input.addEventListener('input', () => { theme.palette[Number(input.dataset.themePalette)] = input.value; saveTheme(); applyTheme(); }));
@@ -74,7 +127,7 @@ document.querySelector('#admin-form').addEventListener('submit', async event => 
   event.preventDefault(); const button = document.querySelector('#publish-level'), message = document.querySelector('#admin-message');
   button.disabled = true; message.textContent = '正在確認唯一解…';
   try {
-    const level = await api('/api/admin/levels', { method: 'POST', headers: { 'content-type': 'application/json', 'x-admin-key': document.querySelector('#admin-key').value }, body: JSON.stringify({ name: document.querySelector('#level-name').value, size: document.querySelector('#level-size').value }) });
+    const level = await api('/api/admin/levels', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: document.querySelector('#level-name').value, size: document.querySelector('#level-size').value }) });
     message.textContent = `已發布「${level.name}」！${level.rating ? ` 難度 ${stars(level.rating)}（${level.rating.hardestName}，${level.rating.score} 分）` : ''}`; setTimeout(() => document.querySelector('#admin-dialog').close(), 900);
   } catch (error) { message.textContent = error.message; } finally { button.disabled = false; }
 });
@@ -82,14 +135,14 @@ document.querySelector('#import-level').addEventListener('click', async () => {
   const button = document.querySelector('#import-level'), message = document.querySelector('#admin-message');
   button.disabled = true; message.textContent = '正在匯入地圖…';
   try {
-    const level = await api('/api/admin/levels/import', { method: 'POST', headers: { 'content-type': 'application/json', 'x-admin-key': document.querySelector('#admin-key').value }, body: JSON.stringify({ name: document.querySelector('#level-name').value, text: document.querySelector('#map-text').value }) });
+    const level = await api('/api/admin/levels/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: document.querySelector('#level-name').value, text: document.querySelector('#map-text').value }) });
     message.textContent = `已匯入「${level.name}」！${level.rating ? ` 難度 ${stars(level.rating)}（${level.rating.hardestName}，${level.rating.score} 分）` : ''}`; setTimeout(() => document.querySelector('#admin-dialog').close(), 900);
   } catch (error) { message.textContent = error.message; } finally { button.disabled = false; }
 });
 
 async function home() {
   state.mode = 'home'; state.single = null; state.room = null; state.practice = null; state.cats.clear(); state.marks.clear();
-  const [levels, leaderboard, progress] = await Promise.all([api('/api/levels'), api('/api/leaderboard'), api(`/api/progress/${state.visitorId}`)]);
+  const [levels, leaderboard, progress] = await Promise.all([api('/api/levels'), api('/api/leaderboard'), api('/api/progress/me')]);
   state.levels = levels; state.cleared = new Set(progress.cleared);
   const nextIndex = levels.findIndex(level => !state.cleared.has(level.id));
   const nextLevel = levels[nextIndex === -1 ? levels.length - 1 : nextIndex] || null;
@@ -106,7 +159,7 @@ async function home() {
   if (nextLevel) document.querySelector('#continue-solo').onclick = () => startSingle(nextLevel.id);
 }
 async function showLevels() {
-  const [levels, progress] = await Promise.all([api('/api/levels'), api(`/api/progress/${state.visitorId}`)]);
+  const [levels, progress] = await Promise.all([api('/api/levels'), api('/api/progress/me')]);
   state.levels = levels; state.cleared = new Set(progress.cleared); state.mode = 'levels';
   const clearedCount = levels.filter(level => state.cleared.has(level.id)).length;
   view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">SOLO MODE</p><h1>一步一腳印解鎖</h1><p>已通過 <b>${clearedCount}</b> / ${levels.length} 關。關卡依難度排序，完成前一關才能打開下一盒罐罐。</p></section>${levels.length ? '' : '<section class="panel"><p class="empty">難度階梯正在產生，稍等幾秒再重新整理。</p></section>'}<section class="level-catalog">${levels.map((level, index) => {
@@ -122,7 +175,7 @@ async function startSingle(id) {
   state.single = await api(`/api/levels/${id}`); state.mode = 'single'; state.singleCompleted = false; state.nextSingleId = null; resetBoard(); renderGame();
 }
 async function showHistory() {
-  const records = await api(`/api/history/${state.visitorId}`);
+  const records = await api('/api/history/me');
   state.mode = 'history'; state.room = null; state.practice = null;
   view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MATCH HISTORY</p><h1>對戰紀錄</h1><p>點選任一場對戰，重新打開那張地圖慢慢解。練習不計入單人進度與排行榜。</p></section><section class="level-catalog">${records.length ? records.map(record => `<article class="catalog-card"><span>${escapeHtml(matchDate(record.finishedAt))} · ROOM ${escapeHtml(record.code)}</span><h2>${escapeHtml(record.roomName)}</h2><p>${record.size} × ${record.size}，你：${escapeHtml(outcomeLabel(record.outcome))}；冠軍：${record.results[0] ? `${escapeHtml(record.results[0].name)} ${record.results[0].time}s` : '無人完成'}</p><button class="primary" data-match="${escapeHtml(record.matchId)}">重新解這張圖</button></article>`).join('') : '<p class="empty">還沒有對戰紀錄。去多人房間跑一場，這裡就會留下地圖。</p>'}</section>`;
   document.querySelector('#back').onclick = home;
@@ -143,7 +196,7 @@ function currentPuzzle() { return soloMode() ? state.single : state.room?.puzzle
 let renderedLayout = '';
 function renderGame(message = '') {
   const puzzle = currentPuzzle(); if (!puzzle) return;
-  const room = state.room, me = room?.players.find(p => p.id === state.visitorId), isSpectator = me?.spectator;
+  const room = state.room, me = room?.players.find(p => p.id === state.playerId), isSpectator = me?.spectator;
   // Finished players are spectators too: their own board is frozen, while
   // they can switch to any remaining player's live board.
   const isViewing = Boolean(isSpectator || me?.alive === false || me?.completedAt);
@@ -240,7 +293,7 @@ function renderRoomPanel(room, me) {
   const leaderboard = room.leaderboard?.length
     ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3><ol>${room.leaderboard.map(row => `<li><strong>${escapeHtml(row.name)}</strong><span>${(row.ms / 1000).toFixed(1)}s · ${row.wins} 勝 · 第 ${row.round} 局</span></li>`).join('')}</ol></div>`
     : '<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3><p class="empty">完成一局後，最快紀錄會出現在這裡。</p></div>';
-  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; return `<button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span><strong>${escapeHtml(player.name)}${player.id === state.visitorId ? '（你）' : ''}</strong><small class="player-progress">${status}</small></button>`; }).join('')}</div>${roleToggle}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? '<button class="primary wide" id="start-room">開始這局</button>' : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>${replay}` : ''}${leaderboard}${exportMap}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; return `<button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span><strong>${escapeHtml(player.name)}${player.id === state.playerId ? '（你）' : ''}</strong><small class="player-progress">${status}</small></button>`; }).join('')}</div>${roleToggle}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? '<button class="primary wide" id="start-room">開始這局</button>' : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>${replay}` : ''}${leaderboard}${exportMap}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
 }
 function renderChatPanel() {
   return `<aside class="chat-panel"><div><p class="eyebrow">ROOM CHAT</p><h2>房間聊天</h2></div><div class="chat-log" id="chat-log"></div><form class="chat-form" id="chat-form"><textarea id="chat-input" rows="1" maxlength="200" placeholder="跟大家說點什麼…"></textarea><button class="primary" type="submit">送出</button></form><small class="chat-notice" id="chat-notice"></small></aside>`;
@@ -260,7 +313,7 @@ function chatNotice(text) {
 function sendChat() {
   const input = document.querySelector('#chat-input'), text = input?.value.trim();
   if (!text || !state.room) return;
-  socket.emit('chat-message', { code: state.room.code, playerId: state.visitorId, text }, result => {
+  socket.emit('chat-message', { code: state.room.code, text }, result => {
     if (result?.error) return chatNotice(result.error);
     if (input.value.trim() === text) input.value = '';
   });
@@ -286,7 +339,7 @@ function appendChatMessage(message) {
   const log = document.querySelector('#chat-log'); if (!log) return;
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 8;
   const line = document.createElement('div');
-  line.className = `chat-line${message.playerId === state.visitorId ? ' mine' : ''}`;
+  line.className = `chat-line${message.playerId === state.playerId ? ' mine' : ''}`;
   const meta = document.createElement('small'); meta.className = 'chat-meta';
   meta.textContent = `${message.name} · ${new Date(message.at).toLocaleTimeString('zh-Hant', { hour: '2-digit', minute: '2-digit' })}`;
   const body = document.createElement('p'); body.textContent = message.text;
@@ -349,7 +402,7 @@ function queueMarksSync() {
   if (marksSyncTimer) return;
   marksSyncTimer = setTimeout(() => {
     marksSyncTimer = null;
-    if (state.mode === 'multi' && state.room) socket.emit('marks-update', { code: state.room.code, playerId: state.visitorId, marks: [...state.marks] });
+    if (state.mode === 'multi' && state.room) socket.emit('marks-update', { code: state.room.code, marks: [...state.marks] });
   }, 150);
 }
 async function chooseCell(cell) {
@@ -360,7 +413,7 @@ async function chooseCell(cell) {
     if (state.pending.has(key)) return;
     // The verdict belongs to the server, but the tap has to look answered now.
     state.pending.add(key); cell.classList.add('pending');
-    socket.emit('guess', { code: state.room.code, playerId: state.visitorId, row, col });
+    socket.emit('guess', { code: state.room.code, row, col });
     return;
   }
   const correct = state.single.solution.some(cat => cat.row === row && cat.col === col);
@@ -376,7 +429,7 @@ async function chooseCell(cell) {
     window.playSfx?.('meow'); playCatReveal(row, col); return;
   }
   if (state.cats.size === state.single.size) {
-    await api('/api/single-complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ visitorId: state.visitorId, name: playerName(), levelId: state.single.id }) });
+    await api('/api/single-complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: playerName(), levelId: state.single.id }) });
     state.cleared.add(state.single.id);
     const currentIndex = state.levels.findIndex(level => level.id === state.single.id);
     state.nextSingleId = state.levels[currentIndex + 1]?.id || null; state.singleCompleted = true;
@@ -395,21 +448,21 @@ async function showMultiplayer() {
     : '<p class="empty public-empty">目前沒有公開房間。開一間讓大家加入吧！</p>';
   view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label><label>最後衝刺秒數<input name="sprintSeconds" type="text" inputmode="numeric" maxlength="4" value="60" /></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section>`;
   document.querySelector('#back').onclick = home;
-  document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target), button = event.target.querySelector('button[type="submit"], button'), label = button.textContent; button.disabled = true; button.textContent = '建立中…'; socket.emit('create-room', { name: playerName(), playerId: state.visitorId, roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); };
-  document.querySelector('#join-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target); socket.emit('join-room', { code: form.get('code'), name: playerName(), playerId: state.visitorId, spectator: form.has('spectator') }, result => { if (result.error) alert(result.error); }); };
+  document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target), button = event.target.querySelector('button[type="submit"], button'), label = button.textContent; button.disabled = true; button.textContent = '建立中…'; socket.emit('create-room', { name: playerName(), roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); };
+  document.querySelector('#join-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target); socket.emit('join-room', { code: form.get('code'), name: playerName(), spectator: form.has('spectator') }, result => { if (result.error) alert(result.error); }); };
   document.querySelector('#refresh-rooms').onclick = showMultiplayer;
-  document.querySelectorAll('[data-public-room]').forEach(button => button.addEventListener('click', () => socket.emit('join-room', { code: button.dataset.publicRoom, name: playerName(), playerId: state.visitorId, spectator: false }, result => { if (result.error) alert(result.error); })));
+  document.querySelectorAll('[data-public-room]').forEach(button => button.addEventListener('click', () => socket.emit('join-room', { code: button.dataset.publicRoom, name: playerName(), spectator: false }, result => { if (result.error) alert(result.error); })));
 }
 function bindRoomButtons() {
-  document.querySelector('#start-room')?.addEventListener('click', () => socket.emit('start-game', { code: state.room.code, playerId: state.visitorId }, result => result?.error && alert(result.error)));
+  document.querySelector('#start-room')?.addEventListener('click', () => socket.emit('start-game', { code: state.room.code }, result => result?.error && alert(result.error)));
   document.querySelector('#copy-room')?.addEventListener('click', async () => { await navigator.clipboard.writeText(state.room.code); const button = document.querySelector('#copy-room'); button.textContent = '已複製！'; setTimeout(() => button.textContent = `複製房間碼 ${state.room.code}`, 1200); });
   document.querySelector('#copy-map')?.addEventListener('click', async event => { const button = event.currentTarget, message = document.querySelector('#map-copy-message'), copied = await copyText(formatPuzzleText(state.room.puzzle)); button.textContent = copied ? '已複製地圖！' : '複製失敗'; if (message) message.textContent = copied ? '' : '複製失敗，請手動複製地圖。'; if (copied) setTimeout(() => { if (button.isConnected) button.textContent = '複製地圖'; }, 1200); });
   document.querySelectorAll('[data-watch]').forEach(button => button.addEventListener('click', () => { state.watchingPlayerId = button.dataset.watch; renderGame(); }));
-  document.querySelector('#restart-room')?.addEventListener('click', event => { const button = event.currentTarget, label = button.textContent; button.disabled = true; button.textContent = '準備中…'; socket.emit('restart-room', { code: state.room.code, playerId: state.visitorId }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); });
-  document.querySelector('#role-toggle')?.addEventListener('click', () => socket.emit('set-lobby-role', { code: state.room.code, playerId: state.visitorId, spectator: !state.room.players.find(player => player.id === state.visitorId)?.spectator }, result => result?.error && alert(result.error)));
-  document.querySelector('#sprint-mode')?.addEventListener('change', event => { const mode = event.target.value; socket.emit('set-sprint-setting', { code: state.room.code, playerId: state.visitorId, mode, value: mode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds }, result => result?.error && alert(result.error)); });
+  document.querySelector('#restart-room')?.addEventListener('click', event => { const button = event.currentTarget, label = button.textContent; button.disabled = true; button.textContent = '準備中…'; socket.emit('restart-room', { code: state.room.code }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); });
+  document.querySelector('#role-toggle')?.addEventListener('click', () => socket.emit('set-lobby-role', { code: state.room.code, spectator: !state.room.players.find(player => player.id === state.playerId)?.spectator }, result => result?.error && alert(result.error)));
+  document.querySelector('#sprint-mode')?.addEventListener('change', event => { const mode = event.target.value; socket.emit('set-sprint-setting', { code: state.room.code, mode, value: mode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds }, result => result?.error && alert(result.error)); });
   document.querySelector('#sprint-value')?.addEventListener('input', event => { const mode = document.querySelector('#sprint-mode')?.value; event.target.value = mode === 'multiply' ? event.target.value.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1') : event.target.value.replace(/\D/g, ''); });
-  document.querySelector('#sprint-value')?.addEventListener('change', event => { const mode = document.querySelector('#sprint-mode')?.value || 'fixed'; socket.emit('set-sprint-setting', { code: state.room.code, playerId: state.visitorId, mode, value: event.target.value }, result => { result?.error && alert(result.error); const stored = state.room.sprintMode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds; event.target.value = stored; }); });
+  document.querySelector('#sprint-value')?.addEventListener('change', event => { const mode = document.querySelector('#sprint-mode')?.value || 'fixed'; socket.emit('set-sprint-setting', { code: state.room.code, mode, value: event.target.value }, result => { result?.error && alert(result.error); const stored = state.room.sprintMode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds; event.target.value = stored; }); });
 }
 function exitRoom(message) {
   state.room = null; state.resumeCode = null; state.connectionLost = false; state.watchingPlayerId = null;
@@ -422,18 +475,18 @@ function leaveRoom() {
   const quit = () => { socket.disconnect(); window.location.reload(); };
   // The reload must not outrun the leave packet, but a dead socket never acks.
   const fallback = setTimeout(quit, 600);
-  socket.emit('leave-room', { code: state.room.code, playerId: state.visitorId }, () => { clearTimeout(fallback); quit(); });
+  socket.emit('leave-room', { code: state.room.code }, () => { clearTimeout(fallback); quit(); });
 }
 
 socket.on('room-state', room => {
   state.room = room; state.mode = 'multi';
-  const me = room.players.find(player => player.id === state.visitorId);
+  const me = room.players.find(player => player.id === state.playerId);
   if (me && !me.spectator) state.idleNotice = '';
   const canWatch = me?.spectator || me?.alive === false || me?.completedAt;
   const targetStillExists = room.players.some(player => player.id === state.watchingPlayerId && !player.spectator);
   if (canWatch && !targetStillExists) {
     // A newly finished player lands on another player when one is available.
-    state.watchingPlayerId = room.players.find(player => !player.spectator && player.id !== state.visitorId)?.id
+    state.watchingPlayerId = room.players.find(player => !player.spectator && player.id !== state.playerId)?.id
       || room.players.find(player => !player.spectator)?.id || null;
   }
   renderGame(); state.deathFlashRendered = true;
@@ -447,7 +500,7 @@ socket.on('disconnect', () => {
 });
 socket.on('connect', () => {
   if (!state.resumeCode || state.mode !== 'multi') return;
-  socket.emit('resume-room', { code: state.resumeCode, playerId: state.visitorId, name: playerName() }, result => {
+  socket.emit('resume-room', { code: state.resumeCode, name: playerName() }, result => {
     if (result?.error) return exitRoom('房間已關閉，已回到首頁。');
     state.connectionLost = false; state.resumeCode = null;
     if (result.movedToSpectator) state.idleNotice = '你離線太久，已改為觀戰。';
@@ -455,6 +508,8 @@ socket.on('connect', () => {
   });
 });
 socket.on('room-closed', ({ reason }) => exitRoom(reason));
+// A rejected handshake means the cookie went stale; a fresh /me mints one.
+socket.on('connect_error', async () => { try { await loadIdentity(); } catch {} });
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && !socket.connected) socket.connect();
 });
@@ -486,4 +541,4 @@ function showFinishNotice(results) {
   notice.querySelector('button').addEventListener('click', () => notice.remove());
   document.body.append(notice);
 }
-home();
+loadIdentity().then(() => socket.connect(), () => socket.connect()).finally(home);
