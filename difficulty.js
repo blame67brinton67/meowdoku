@@ -359,4 +359,9 @@ function rate({ size, regions }) {
   };
 }
 
-module.exports = { rate, starsFor, STAR_THRESHOLDS, RULES, buildBoard };
+module.exports = {
+  rate, starsFor, STAR_THRESHOLDS, RULES, buildBoard,
+  // The solving primitives, so a hint can ask "what is the cheapest next step
+  // from *this* position" with the very same tier order the rater charges.
+  CELL: { UNKNOWN, CAT, GONE }, freshState, cloneState, place, candidatesOf, hasEmptyUnit, tiersFor, runTier, lineMasksFor, combinations, popcount
+};

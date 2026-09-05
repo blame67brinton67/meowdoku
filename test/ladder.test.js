@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { validLadder, rung, ratingOf, ladderTitle, LADDER_VERSION, LADDER_LENGTH } = require('../ladder');
+const { validLadder, rung, ratingOf, ladderTitle, chapterOf, CHAPTERS, LADDER_VERSION, LADDER_LENGTH } = require('../ladder');
 const { generatePuzzle } = require('../puzzle');
 
 const rungLevel = (id, score) => ({ id, size: 2, regions: [0, 0, 1, 1], solution: [], rating: { score, stars: 1 } });
@@ -40,9 +40,16 @@ test('the 48 rung titles are distinct, deterministic and chaptered', () => {
     assert.ok(!title.name.includes('階'));
     assert.strictEqual(title.ladder.stage, index + 1);
     assert.ok(title.ladder.chapterStage >= 1 && title.ladder.chapterStage <= title.ladder.chapterLength);
-    assert.strictEqual((title.ladder.chapterIndex - 1) * title.ladder.chapterLength + title.ladder.chapterStage, index + 1);
+    assert.strictEqual(title.ladder.chapter, chapterOf(index).name);
+    assert.strictEqual(title.ladder.chapterIndex, CHAPTERS.indexOf(chapterOf(index)) + 1);
   }
-  assert.strictEqual(new Set(titles.map(title => title.ladder.chapter)).size, LADDER_LENGTH / titles[0].ladder.chapterLength);
+  assert.strictEqual(new Set(titles.map(title => title.ladder.chapter)).size, CHAPTERS.length);
+  // Stage numbering restarts in every chapter and runs to that chapter's length.
+  for (const chapter of CHAPTERS) {
+    const stages = titles.filter(title => title.ladder.chapter === chapter.name).map(title => title.ladder.chapterStage);
+    assert.deepStrictEqual(stages, stages.map((_, i) => i + 1));
+    assert.strictEqual(stages.length, titles.find(title => title.ladder.chapter === chapter.name).ladder.chapterLength);
+  }
   assert.notStrictEqual(titles[0].ladder.chapter, titles[LADDER_LENGTH - 1].ladder.chapter);
 });
 
