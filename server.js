@@ -460,7 +460,9 @@ io.on('connection', socket => {
   socket.on('set-lobby-role', ({ code, playerId, spectator }, callback) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
     if (!room || !player) return callback?.({ error: '找不到房間成員' });
-    if (room.status !== 'lobby') return callback?.({ error: '倒數開始後不能再變更身分' });
+    // A finished round has already been scored, so switching there only affects the next one.
+    if (room.status !== 'lobby' && room.status !== 'finished') return callback?.({ error: '這局還有人在解，結束後才能變更身分' });
+    if (room.restartPending) return callback?.({ error: '房主正在準備新題目，請稍候' });
     player.spectator = Boolean(spectator); player.alive = true;
     player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
     emitRoom(room); checkAllSpectator(room); callback?.({ ok: true });
@@ -604,4 +606,4 @@ function joinRoom(socket, room, { name, playerId, spectator }) {
 }
 
 if (require.main === module) server.listen(PORT, () => { console.log(`MeowDoku is ready at http://localhost:${PORT}`); startLadder(); });
-module.exports = { server, io, rooms };
+module.exports = { server, io, rooms, compactRoom };

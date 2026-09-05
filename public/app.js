@@ -237,11 +237,12 @@ function renderRoomPanel(room, me) {
   const blocked = isHost && room.kicked?.length
     ? `<div class="blocked-list"><p class="eyebrow">BLOCKED</p>${room.kicked.map(entry => `<p><span>${escapeHtml(entry.name)}</span><button class="link-button" data-unblock="${escapeHtml(entry.id)}">解除封鎖</button></p>`).join('')}</div>`
     : '';
-  const exportMap = room.status === 'finished' && room.puzzle.solution
-    ? '<button class="copy-button" id="copy-map">複製地圖</button><small class="map-copy-message" id="map-copy-message"></small>'
+  const knockedOut = room.status === 'playing' && me && !me.spectator && me.alive === false;
+  const exportMap = (room.status === 'finished' && room.puzzle.solution) || knockedOut
+    ? `<button class="copy-button" id="copy-map">複製地圖</button><small class="map-copy-message" id="map-copy-message">${knockedOut ? '其他人還在解，先只給色塊；結束後再複製會附上答案。' : ''}</small>`
     : room.status === 'playing' ? '<small class="map-copy-hint">比賽結束後可複製地圖</small>' : '';
-  const roleToggle = room.status === 'lobby'
-    ? `<button class="role-toggle" id="role-toggle">${me?.spectator ? '加入本局，成為玩家' : '改為觀戰者'}</button>` : '';
+  const roleToggle = room.status === 'lobby' || room.status === 'finished'
+    ? `<button class="role-toggle" id="role-toggle">${me?.spectator ? (room.status === 'finished' ? '下一局加入，成為玩家' : '加入本局，成為玩家') : '改為觀戰者'}</button>` : '';
   const sprintMode = room.sprintMode === 'multiply' ? 'multiply' : 'fixed';
   const sprintValue = sprintMode === 'multiply' ? room.sprintFactor : room.sprintSeconds;
   const sprintSetting = room.status === 'lobby'
@@ -293,7 +294,7 @@ function sendChat() {
 function formatPuzzleText(puzzle) {
   const rows = [];
   for (let row = 0; row < puzzle.size; row++) rows.push(puzzle.regions.slice(row * puzzle.size, (row + 1) * puzzle.size).map(region => region + 1).join(' '));
-  rows.push(puzzle.solution.map(cat => cat.col + 1).join(' '));
+  if (puzzle.solution) rows.push(puzzle.solution.map(cat => cat.col + 1).join(' '));
   return rows.join('\n');
 }
 async function copyText(text) {

@@ -6,7 +6,7 @@ const path = require('path');
 const { io: connect } = require('socket.io-client');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'meowdoku-room-test-'));
-const { server, io, rooms } = require('../server');
+const { server, io, rooms, compactRoom } = require('../server');
 
 let url;
 const clients = new Set();
@@ -278,4 +278,55 @@ test('room password gates joining and never leaves the server', async () => {
   const open = await client();
   assert.equal((await emit(open, 'join-room', { code, name: 'o', playerId: 'open-1' })).ok, true);
   void aId;
+});
+
+test('eliminated player gets a solution-free payload until the round ends', async () => {
+  const { code, sockets: [host, guest], ids: [hostId, guestId] } = await makeRoom(['host', 'guest']);
+  await startMatch(code, host, hostId);
+  const state = once(guest, 'room-state');
+  await eliminate(code, guest, guestId);
+  const payload = await state;
+  assert.equal(payload.players.find(p => p.id === guestId).alive, false);
+  assert.equal(payload.status, 'playing');
+  assert.ok(Array.isArray(payload.puzzle.regions));
+  assert.doesNotMatch(JSON.stringify(payload), /solution/);
+  const done = finished(guest);
+  await solve(code, host, hostId);
+  await done;
+  assert.deepEqual(JSON.parse(JSON.stringify(compactRoom(room(code)))).puzzle.solution, room(code).puzzle.solution);
+});
+
+test('roles can change once everyone is done, never mid-round, without touching points', async () => {
+  const { code, sockets: [host, guest, third], ids: [hostId, guestId, thirdId] } = await makeRoom(['host', 'guest', 'third']);
+  await startMatch(code, host, hostId);
+  await eliminate(code, guest, guestId);
+  const midRound = await emit(guest, 'set-lobby-role', { code, playerId: guestId, spectator: true });
+  assert.match(midRound.error, /結束後/);
+  assert.equal(room(code).players.get(guestId).spectator, false);
+  const done = finished(host);
+  await solve(code, host, hostId);
+  await solve(code, third, thirdId);
+  await done;
+  assert.equal(room(code).status, 'finished');
+  assert.equal(stat(code, hostId).points, 3);
+  assert.equal(stat(code, thirdId).points, 2);
+  assert.equal(stat(code, guestId).points, 0);
+  assert.equal((await emit(host, 'set-lobby-role', { code, playerId: hostId, spectator: true })).ok, true);
+  assert.equal((await emit(guest, 'set-lobby-role', { code, playerId: guestId, spectator: true })).ok, true);
+  assert.equal((await emit(guest, 'set-lobby-role', { code, playerId: guestId, spectator: false })).ok, true);
+  assert.equal(room(code).status, 'finished');
+  assert.equal(stat(code, hostId).points, 3);
+  assert.equal(stat(code, hostId).played, 1);
+  assert.equal(stat(code, guestId).points, 0);
+  assert.equal(stat(code, guestId).played, 1);
+  assert.equal((await emit(host, 'restart-room', { code })).ok, true);
+  await startMatch(code, host, hostId);
+  const next = finished(guest);
+  await solve(code, guest, guestId);
+  await solve(code, third, thirdId);
+  await next;
+  assert.equal(stat(code, hostId).points, 3);
+  assert.equal(stat(code, hostId).played, 1);
+  assert.equal(stat(code, guestId).points, 2);
+  assert.equal(stat(code, thirdId).points, 3);
 });
