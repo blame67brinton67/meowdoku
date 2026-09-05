@@ -15,18 +15,34 @@
     <header class="topbar">
       <button id="home-button" class="brand" aria-label="返回首頁"><span>◒</span> MeowDoku</button>
       <div class="player-name"><label for="player-name">玩家</label><input id="player-name" maxlength="20" placeholder="輸入暱稱" /></div>
-      <button id="auth-button" class="quiet-button">登入 / 註冊</button><span id="account" class="account" hidden><strong id="account-name"></strong><button id="logout-button" class="quiet-button">登出</button></span><button id="theme-button" class="quiet-button">外觀</button><button id="admin-button" class="quiet-button" hidden>管理關卡</button><button id="mute-button" class="quiet-button" aria-label="音效開關">🔊</button>
+      <button id="auth-button" class="quiet-button">登入 / 註冊</button><span id="account" class="account" hidden><span id="account-avatar"></span><strong id="account-name"></strong><button id="logout-button" class="quiet-button">登出</button></span><button id="profile-button" class="quiet-button">個人主頁</button><button id="theme-button" class="quiet-button">外觀</button><button id="admin-button" class="quiet-button" hidden>管理關卡</button><button id="mute-button" class="quiet-button" aria-label="音效開關">🔊</button>
     </header>
     <section id="view" aria-live="polite"></section>
   </main>
-  <dialog id="admin-dialog">
-    <form id="admin-form" method="dialog" class="dialog-card">
+  <dialog id="admin-dialog" class="admin-dialog">
+    <form id="admin-form" method="dialog" class="dialog-card" data-tab="generate">
       <button type="button" class="close" aria-label="關閉">×</button>
-      <p class="eyebrow">ADMIN STUDIO</p><h2>建立單人關卡</h2>
-      <label>關卡名稱<input id="level-name" maxlength="40" placeholder="例如：午後曬太陽" required /></label>
-      <label>地圖尺寸<select id="level-size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label>
-      <button class="primary" id="publish-level" value="default">產生並發布唯一解關卡</button>
-      <section class="admin-import"><p class="eyebrow">MAP IMPORT</p><h3>匯入地圖</h3><p class="hint">地圖名稱沿用上方欄位</p><textarea id="map-text" rows="8" placeholder="貼上地圖文字"></textarea><button type="button" class="primary" id="import-level">匯入地圖</button></section>
+      <p class="eyebrow">ADMIN STUDIO</p><h2>管理單人關卡</h2>
+      <div class="auth-tabs"><button type="button" class="auth-tab active" data-admin-tab="generate">產生地圖</button><button type="button" class="auth-tab" data-admin-tab="import">自訂地圖</button><button type="button" class="auth-tab" data-admin-tab="order">關卡順序</button></div>
+      <section class="admin-pane" data-admin-pane="generate">
+        <label>關卡名稱<input id="level-name" maxlength="40" placeholder="例如：午後曬太陽" /></label>
+        <label>地圖尺寸<select id="level-size"><option value="5">5 × 5</option><option value="6">6 × 6</option><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label>
+        <button class="primary" id="publish-level" value="default">產生並發布唯一解關卡</button>
+      </section>
+      <section class="admin-pane" data-admin-pane="import" hidden>
+        <label>關卡名稱<input id="import-name" maxlength="40" placeholder="例如：手繪的小巷" /></label>
+        <label>地圖尺寸<select id="import-size"><option value="" selected>依地圖行數</option><option value="5">5 × 5</option><option value="6">6 × 6</option><option value="7">7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label>
+        <label>地圖文字<textarea id="map-text" rows="8" placeholder="前 N 行是每格的區域編號（1–N），最後一行是每行貓咪所在的列"></textarea></label>
+        <p class="hint">先「檢驗」會列出所有不合法之處，不會發布；確認沒問題再發布。</p>
+        <div class="admin-actions"><button type="button" class="quiet-button" id="validate-level">只檢驗</button><button type="button" class="primary" id="import-level">檢驗並發布</button></div>
+      </section>
+      <section class="admin-pane" data-admin-pane="order" hidden>
+        <p class="hint">拖曳或用 ▲▼ 調整順序；玩家必須先過前一關才能解鎖下一關，已通關的關卡不受影響。</p>
+        <ol id="level-order" class="level-order"></ol>
+        <div class="admin-actions"><button type="button" class="quiet-button" id="reload-order">還原</button><button type="button" class="primary" id="save-order">儲存順序</button></div>
+      </section>
+      <ul id="admin-errors" class="admin-errors" hidden></ul>
+      <div id="admin-preview" class="admin-preview" hidden></div>
       <p id="admin-message" class="message"></p>
     </form>
   </dialog>

@@ -8,6 +8,7 @@ const state = {
   playerId: null, user: null, guest: null,
   name: localStorage.meowdokuName || '',
   mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false,
+  singleStartedAt: 0, singleMistakes: 0, singleAttemptId: null,
   touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: '',
   hintQuota: null, hint: null, hintLevel: 0, hintBusy: false, hintMessage: ''
 };
@@ -61,9 +62,22 @@ const playerName = () => state.name || state.user?.displayName || `神祕貓奴 
 const soloMode = () => state.mode === 'single' || state.mode === 'practice';
 const matchDate = value => new Date(value).toLocaleString('zh-Hant', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const outcomeLabel = outcome => outcome.status === 'solved' ? `第 ${outcome.rank} 名 · ${outcome.time}s` : outcome.status === 'eliminated' ? '被淘汰' : '時間到未完成';
+const DEFAULT_AVATAR = '🐱';
+const FRAME_ID = /^[a-z]+$/;
+// Frames are CSS classes; the id is whitelisted so a stray value cannot
+// smuggle in another class name.
+const avatarHtml = (avatar, frame, extra = '') => `<span class="avatar frame-${FRAME_ID.test(frame || '') ? frame : 'plain'} ${extra}" aria-hidden="true">${escapeHtml(avatar || DEFAULT_AVATAR)}</span>`;
 
 document.querySelector('#home-button').addEventListener('click', home);
-document.querySelector('#admin-button').addEventListener('click', () => { document.querySelector('#admin-message').textContent = ''; document.querySelector('#admin-dialog').showModal(); });
+document.querySelector('#admin-button').addEventListener('click', () => { adminFeedback(); document.querySelector('#admin-dialog').showModal(); if (document.querySelector('#admin-form').dataset.tab === 'order') loadLevelOrder(); });
+document.querySelectorAll('[data-admin-tab]').forEach(button => button.addEventListener('click', () => setAdminTab(button.dataset.adminTab)));
+function setAdminTab(tab) {
+  document.querySelectorAll('[data-admin-tab]').forEach(button => button.classList.toggle('active', button.dataset.adminTab === tab));
+  document.querySelectorAll('[data-admin-pane]').forEach(pane => { pane.hidden = pane.dataset.adminPane !== tab; });
+  document.querySelector('#admin-form').dataset.tab = tab;
+  adminFeedback();
+  if (tab === 'order') loadLevelOrder();
+}
 document.querySelector('#admin-dialog .close').addEventListener('click', () => document.querySelector('#admin-dialog').close());
 document.querySelector('#auth-button').addEventListener('click', () => { setAuthTab('login'); document.querySelector('#auth-message').textContent = ''; document.querySelector('#auth-dialog').showModal(); });
 document.querySelector('#auth-dialog .close').addEventListener('click', () => document.querySelector('#auth-dialog').close());
@@ -80,7 +94,7 @@ function renderAuth() {
   const button = document.querySelector('#auth-button'), account = document.querySelector('#account');
   const isUser = Boolean(state.user);
   button.hidden = isUser; account.hidden = !isUser;
-  if (isUser) document.querySelector('#account-name').textContent = state.user.displayName;
+  if (isUser) { document.querySelector('#account-name').textContent = state.user.displayName; document.querySelector('#account-avatar').innerHTML = avatarHtml(state.user.avatar, state.user.frame, 'small'); }
   document.querySelector('#admin-button').hidden = !state.user?.isAdmin;
   document.querySelector('#guest-notice').textContent = state.guest?.notice || '';
 }
@@ -101,6 +115,7 @@ document.querySelector('#auth-form').addEventListener('submit', async event => {
     window.location.reload();
   } catch (error) { message.textContent = error.message; button.disabled = false; }
 });
+document.querySelector('#profile-button').addEventListener('click', showProfile);
 document.querySelector('#logout-button').addEventListener('click', async () => {
   try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
   window.location.reload();
@@ -113,21 +128,106 @@ document.querySelector('#reset-theme').addEventListener('click', () => { theme.p
 applyTheme();
 // Right-click is reserved for puzzle annotation, not the browser context menu.
 document.addEventListener('contextmenu', event => event.preventDefault());
+// Errors from the admin API carry the full list of problems, not just the
+// first, so the dialog shows them as a list and keeps the single-line message
+// for progress and success.
+function adminFeedback(message = '', errors = [], preview = null) {
+  document.querySelector('#admin-message').textContent = message;
+  const list = document.querySelector('#admin-errors');
+  list.hidden = !errors.length; list.innerHTML = errors.map(error => `<li>${escapeHtml(error)}</li>`).join('');
+  const box = document.querySelector('#admin-preview');
+  box.hidden = !preview;
+  box.innerHTML = preview ? `${previewBoard(preview)}<div><strong>${escapeHtml(preview.name || `${preview.size} × ${preview.size}`)}</strong><small>${preview.size} × ${preview.size}，${preview.size} 隻貓咪</small>${ratingLine(preview.rating)}</div>` : '';
+}
+// A miniature, inert board for the admin dialog: spans instead of buttons so
+// nothing inside the form can submit it.
+function previewBoard(puzzle) {
+  const cats = new Set((puzzle.solution || []).map(cat => `${cat.row}:${cat.col}`));
+  return `<div class="board locked" style="--n:${puzzle.size}">${puzzle.regions.map((region, cell) => {
+    const key = `${Math.floor(cell / puzzle.size)}:${cell % puzzle.size}`;
+    return `<span class="cell ${cats.has(key) ? 'cat' : ''}" style="--region:${palette[region % palette.length]}" data-region="${region}">${cats.has(key) ? '🐈' : ''}</span>`;
+  }).join('')}</div>`;
+}
+const adminPost = (url, body, method = 'POST') => fetch(url, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(async response => {
+  const data = await response.json();
+  if (!response.ok) throw Object.assign(new Error(data.error || '發生錯誤'), { errors: data.errors || [] });
+  return data;
+});
+const publishedLine = (verb, level) => `${verb}「${level.name}」！${level.rating ? ` 難度 ${stars(level.rating)}（${level.rating.hardestName}，${level.rating.score} 分）` : ''}`;
 document.querySelector('#admin-form').addEventListener('submit', async event => {
-  event.preventDefault(); const button = document.querySelector('#publish-level'), message = document.querySelector('#admin-message');
-  button.disabled = true; message.textContent = '正在確認唯一解…';
+  event.preventDefault();
+  if (document.querySelector('#admin-form').dataset.tab !== 'generate') return;
+  const button = document.querySelector('#publish-level');
+  button.disabled = true; adminFeedback('正在產生并確認唯一解…');
   try {
-    const level = await api('/api/admin/levels', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: document.querySelector('#level-name').value, size: document.querySelector('#level-size').value }) });
-    message.textContent = `已發布「${level.name}」！${level.rating ? ` 難度 ${stars(level.rating)}（${level.rating.hardestName}，${level.rating.score} 分）` : ''}`; setTimeout(() => document.querySelector('#admin-dialog').close(), 900);
-  } catch (error) { message.textContent = error.message; } finally { button.disabled = false; }
+    const level = await adminPost('/api/admin/levels', { name: document.querySelector('#level-name').value, size: document.querySelector('#level-size').value });
+    adminFeedback(publishedLine('已發布', level), [], level);
+  } catch (error) { adminFeedback(error.message, error.errors); } finally { button.disabled = false; }
+});
+const importBody = () => ({ name: document.querySelector('#import-name').value, size: document.querySelector('#import-size').value, text: document.querySelector('#map-text').value });
+document.querySelector('#validate-level').addEventListener('click', async () => {
+  const button = document.querySelector('#validate-level');
+  button.disabled = true; adminFeedback('正在檢驗地圖…');
+  try {
+    const result = await adminPost('/api/admin/levels/validate', importBody());
+    adminFeedback('地圖合法，可以發布。', [], { ...result, name: document.querySelector('#import-name').value });
+  } catch (error) { adminFeedback(error.errors?.length > 1 ? `地圖有 ${error.errors.length} 個問題：` : '地圖不合法：', error.errors?.length ? error.errors : [error.message]); } finally { button.disabled = false; }
 });
 document.querySelector('#import-level').addEventListener('click', async () => {
-  const button = document.querySelector('#import-level'), message = document.querySelector('#admin-message');
-  button.disabled = true; message.textContent = '正在匯入地圖…';
+  const button = document.querySelector('#import-level');
+  button.disabled = true; adminFeedback('正在檢驗并發布地圖…');
   try {
-    const level = await api('/api/admin/levels/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: document.querySelector('#level-name').value, text: document.querySelector('#map-text').value }) });
-    message.textContent = `已匯入「${level.name}」！${level.rating ? ` 難度 ${stars(level.rating)}（${level.rating.hardestName}，${level.rating.score} 分）` : ''}`; setTimeout(() => document.querySelector('#admin-dialog').close(), 900);
-  } catch (error) { message.textContent = error.message; } finally { button.disabled = false; }
+    const level = await adminPost('/api/admin/levels/import', importBody());
+    adminFeedback(publishedLine('已發布', level), [], level);
+  } catch (error) { adminFeedback(error.errors?.length > 1 ? `地圖有 ${error.errors.length} 個問題，尚未發布：` : '地圖不合法，尚未發布：', error.errors?.length ? error.errors : [error.message]); } finally { button.disabled = false; }
+});
+// The order pane edits a local copy; nothing changes on the server until saved.
+let orderDraft = [];
+async function loadLevelOrder() {
+  orderDraft = await api('/api/levels');
+  renderLevelOrder();
+}
+function moveLevel(from, to) {
+  if (to < 0 || to >= orderDraft.length || from === to) return;
+  const [level] = orderDraft.splice(from, 1); orderDraft.splice(to, 0, level);
+  renderLevelOrder();
+}
+function renderLevelOrder() {
+  const list = document.querySelector('#level-order');
+  list.innerHTML = orderDraft.map((level, index) => `<li draggable="true" data-index="${index}"><span>${String(index + 1).padStart(3, '0')}</span><div>${escapeHtml(level.name)}<small>${level.size} × ${level.size}${level.rating ? ` · ${stars(level.rating)} ${level.rating.score} 分` : ''}</small></div><button type="button" data-move="-1" aria-label="上移" ${index === 0 ? 'disabled' : ''}>▲</button><button type="button" data-move="1" aria-label="下移" ${index === orderDraft.length - 1 ? 'disabled' : ''}>▼</button></li>`).join('') || '<li><small>還沒有關卡。</small></li>';
+  list.querySelectorAll('[data-move]').forEach(button => button.onclick = () => { const index = Number(button.closest('li').dataset.index); moveLevel(index, index + Number(button.dataset.move)); });
+  let dragging = null;
+  list.querySelectorAll('li[draggable]').forEach(item => {
+    item.ondragstart = event => { dragging = Number(item.dataset.index); item.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; };
+    item.ondragend = () => { dragging = null; list.querySelectorAll('li').forEach(row => row.classList.remove('dragging', 'drop-before', 'drop-after')); };
+    // offsetY is relative to whichever child was hit, so measure against the row.
+    const upperHalf = event => { const box = item.getBoundingClientRect(); return event.clientY < box.top + box.height / 2; };
+    item.ondragover = event => {
+      if (dragging === null) return;
+      event.preventDefault();
+      const before = upperHalf(event);
+      list.querySelectorAll('li').forEach(row => row.classList.remove('drop-before', 'drop-after'));
+      item.classList.add(before ? 'drop-before' : 'drop-after');
+    };
+    item.ondrop = event => {
+      event.preventDefault();
+      if (dragging === null) return;
+      const target = Number(item.dataset.index), before = upperHalf(event);
+      let to = before ? target : target + 1;
+      if (dragging < to) to--;
+      moveLevel(dragging, to);
+    };
+  });
+}
+document.querySelector('#reload-order').addEventListener('click', () => { adminFeedback(); loadLevelOrder(); });
+document.querySelector('#save-order').addEventListener('click', async () => {
+  const button = document.querySelector('#save-order');
+  button.disabled = true; adminFeedback('正在儲存順序…');
+  try {
+    orderDraft = await adminPost('/api/admin/levels/order', { ids: orderDraft.map(level => level.id) }, 'PUT');
+    renderLevelOrder(); adminFeedback('關卡順序已儲存。');
+    if (state.mode === 'home') home(); else if (state.mode === 'levels') showLevels();
+  } catch (error) { adminFeedback(error.message, error.errors); } finally { button.disabled = false; }
 });
 
 async function home() {
@@ -142,11 +242,18 @@ async function home() {
     <section class="mode-grid"><article class="mode-card solo"><span class="mode-icon">⌁</span><p class="eyebrow">SOLO MODE</p><h2>獨自推理</h2><p>挑一個關卡，慢慢找到唯一的答案。</p><button class="primary" id="open-solo">選擇關卡</button></article>
     <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><button class="dark-button" id="open-multi">進入多人遊戲</button><button class="link-button" id="open-history">對戰紀錄（重新解題）</button></article></section>
     <section class="lower-grid"><article class="panel continue-panel"><div><p class="eyebrow">SINGLE PLAYER</p><h2>接著挑戰</h2><p>${!nextLevel ? '難度階梯正在產生，稍等幾秒再回來。' : nextIndex === -1 ? '所有罐罐都找到了，真是傳奇貓奴。' : '解完前一關，下一盒罐罐正在等你。'}</p></div><div class="continue-level"><span>${continueLabel}</span><strong>${nextLevel ? escapeHtml(nextLevel.name) : '尚未有關卡'}</strong><small>${nextLevel ? `${nextLevel.size} × ${nextLevel.size}` : '貓咪還在畫地圖'}</small>${nextLevel ? ratingLine(nextLevel.rating) : ''}</div><button class="primary" id="continue-solo" ${nextLevel ? '' : 'disabled'}>${nextIndex === -1 ? '再次挑戰 →' : '繼續解題 →'}</button><button class="link-button" id="open-solo-2">查看全部關卡</button></article>
-    <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.length ? `<ol>${leaderboard.slice(0, 5).map((entry, i) => `<li><span>${i + 1}</span><strong>${escapeHtml(entry.name)}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}</article></section>`;
+    <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.top.length ? `<ol>${leaderboard.top.map(entry => `<li class="${entry.me ? 'me' : ''}"><span>${entry.rank}</span>${avatarHtml(entry.avatar, entry.frame, 'small')}<strong>${escapeHtml(entry.name)}${entry.me ? '（你）' : ''}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}${myRankLine(leaderboard)}</article></section>`;
   document.querySelector('#open-solo').onclick = showLevels; document.querySelector('#open-solo-2').onclick = showLevels;
   document.querySelector('#open-multi').onclick = showMultiplayer;
   document.querySelector('#open-history').onclick = showHistory;
   if (nextLevel) document.querySelector('#continue-solo').onclick = () => startSingle(nextLevel.id);
+}
+// The rank comes from the server; a guest is told to sign in rather than
+// shown a number that would vanish with the cookie.
+function myRankLine(leaderboard) {
+  if (!leaderboard.me) return '<p class="my-rank">登入才會有排名。</p>';
+  if (leaderboard.me.inTop) return '';
+  return `<p class="my-rank">你目前第 <b>${leaderboard.me.rank}</b> 名 / 共 ${leaderboard.me.total} 人（${leaderboard.me.cleared} 關）</p>`;
 }
 async function showLevels() {
   const [levels, progress] = await Promise.all([api('/api/levels'), api('/api/progress/me')]);
@@ -162,7 +269,11 @@ async function showLevels() {
 }
 async function startSingle(id) {
   if (!state.levels.length) state.levels = await api('/api/levels');
-  state.single = await api(`/api/levels/${id}`); state.mode = 'single'; state.singleCompleted = false; state.nextSingleId = null; resetBoard(); renderGame(); loadHintQuota();
+  state.single = await api(`/api/levels/${id}`); state.mode = 'single'; state.singleCompleted = false; state.nextSingleId = null;
+  // Mistakes accumulate across retries of the same level until it is cleared.
+  if (state.singleAttemptId !== id) { state.singleAttemptId = id; state.singleMistakes = 0; }
+  state.singleStartedAt = Date.now();
+  resetBoard(); renderGame(); loadHintQuota();
 }
 async function showHistory() {
   const records = await api('/api/history/me');
@@ -330,9 +441,9 @@ function renderRoomPanel(room, me) {
       : `<p class="sprint-setting readonly">最後衝刺：<b>${sprintMode === 'multiply' ? `第一名用時 × ${room.sprintFactor}` : `${room.sprintSeconds} 秒`}</b></p>`
     : '';
   const leaderboard = room.leaderboard?.length
-    ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3><ol>${room.leaderboard.map(row => `<li><strong>${escapeHtml(row.name)}</strong><span>${(row.ms / 1000).toFixed(1)}s · ${row.wins} 勝 · 第 ${row.round} 局</span></li>`).join('')}</ol></div>`
+    ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3><ol>${room.leaderboard.map(row => `<li>${avatarHtml(row.avatar, row.frame, 'small')}<strong>${escapeHtml(row.name)}</strong><span>${(row.ms / 1000).toFixed(1)}s · ${row.wins} 勝 · 第 ${row.round} 局</span></li>`).join('')}</ol></div>`
     : '<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3><p class="empty">完成一局後，最快紀錄會出現在這裡。</p></div>';
-  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; return `<button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span><strong>${escapeHtml(player.name)}${player.id === state.playerId ? '（你）' : ''}</strong><small class="player-progress">${status}</small></button>`; }).join('')}</div>${roleToggle}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? '<button class="primary wide" id="start-room">開始這局</button>' : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>${replay}` : ''}${leaderboard}${exportMap}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; return `<button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span>${avatarHtml(player.avatar, player.frame, 'small')}<strong>${escapeHtml(player.name)}${player.id === state.playerId ? '（你）' : ''}</strong><small class="player-progress">${status}</small></button>`; }).join('')}</div>${roleToggle}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? '<button class="primary wide" id="start-room">開始這局</button>' : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>${replay}` : ''}${leaderboard}${exportMap}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
 }
 function renderChatPanel() {
   return `<aside class="chat-panel"><div><p class="eyebrow">ROOM CHAT</p><h2>房間聊天</h2></div><div class="chat-log" id="chat-log"></div><form class="chat-form" id="chat-form"><textarea id="chat-input" rows="1" maxlength="200" placeholder="跟大家說點什麼…"></textarea><button class="primary" type="submit">送出</button></form><small class="chat-notice" id="chat-notice"></small></aside>`;
@@ -460,7 +571,7 @@ async function chooseCell(cell) {
   clearHint();
   // Practice exists to work the puzzle out, so a wrong cell is only marked.
   if (!correct && state.mode === 'practice') { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，再想想。'); const board = document.querySelector('.board'); board.classList.add('shake'); setTimeout(() => board.classList.remove('shake'), 500); return; }
-  if (!correct) { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
+  if (!correct) { state.singleMistakes++; window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
   state.cats.add(key); state.marks.delete(key);
   if (state.mode === 'practice') {
     if (state.cats.size === state.single.size) {
@@ -470,8 +581,9 @@ async function chooseCell(cell) {
     window.playSfx?.('meow'); playCatReveal(row, col); return;
   }
   if (state.cats.size === state.single.size) {
-    await api('/api/single-complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: playerName(), levelId: state.single.id }) });
-    state.cleared.add(state.single.id);
+    const result = await api('/api/single-complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: playerName(), levelId: state.single.id, ms: Date.now() - state.singleStartedAt, mistakes: state.singleMistakes }) });
+    state.cleared.add(state.single.id); state.singleAttemptId = null;
+    if (result.unlocked?.length) showAchievementToast(result.unlocked);
     const currentIndex = state.levels.findIndex(level => level.id === state.single.id);
     state.nextSingleId = state.levels[currentIndex + 1]?.id || null; state.singleCompleted = true;
     renderGame('完美！這盒罐罐是你的了。'); document.querySelector('.board').classList.add('locked');
@@ -556,6 +668,7 @@ document.addEventListener('visibilitychange', () => {
 });
 socket.on('final-sprint', ({ deadline, sprintSeconds }) => { window.playSfx?.('sprint'); state.room.deadline = deadline; renderGame(`第一位完成！${sprintSeconds} 秒最後衝刺開始。`); });
 socket.on('game-finished', ({ results }) => { window.lastResults = results; renderGame('本局結束！'); showFinishNotice(results); });
+socket.on('achievements-unlocked', list => { if (Array.isArray(list) && list.length) showAchievementToast(list); });
 socket.on('chat-message', message => { if (message.code !== state.room?.code) return; state.chat.push(message); if (state.chat.length > 50) state.chat.shift(); appendChatMessage(message); });
 socket.on('chat-backlog', messages => { state.chat = Array.isArray(messages) ? messages.slice(-50) : []; const log = document.querySelector('#chat-log'); if (log) { log.textContent = ''; state.chat.forEach(appendChatMessage); log.scrollTop = log.scrollHeight; } });
 setInterval(() => document.querySelectorAll('[data-deadline]').forEach(node => { const t = remainingSeconds(node.dataset.deadline); const changed = node.dataset.tickAt !== String(t); node.textContent = t; if (changed && t > 0 && t <= 5) window.playSfx?.('tick'); node.dataset.tickAt = t; }), 250);
@@ -569,6 +682,64 @@ function playCatReveal(row, col) {
     cell.classList.add('cat-reveal');
     setTimeout(() => cell.classList.remove('cat-reveal'), 650);
   });
+}
+
+// Sits in a corner and fades on its own: the board must stay visible and
+// clickable while it is up.
+function showAchievementToast(list) {
+  let stack = document.querySelector('#achievement-toasts');
+  if (!stack) { stack = document.createElement('div'); stack.id = 'achievement-toasts'; stack.className = 'achievement-toasts'; stack.setAttribute('aria-live', 'polite'); document.body.append(stack); }
+  for (const achievement of list) {
+    const toast = document.createElement('div'); toast.className = 'achievement-toast';
+    toast.innerHTML = `<span class="toast-icon">🏅</span><div><p class="eyebrow">成就解鎖</p><strong>${escapeHtml(achievement.name)}</strong><small>${escapeHtml(achievement.description)}${achievement.frame ? ' · 獲得新相框' : ''}</small></div>`;
+    stack.append(toast);
+    setTimeout(() => toast.classList.add('leaving'), 5200); setTimeout(() => toast.remove(), 5800);
+  }
+  window.playSfx?.('meow');
+}
+
+async function showProfile() {
+  state.mode = 'profile'; state.room = null; state.practice = null;
+  const back = '<button class="back-button" id="back">← 首頁</button>';
+  if (!state.user) {
+    view.innerHTML = `<section class="page-heading">${back}<p class="eyebrow">PROFILE</p><h1>個人主頁</h1></section><section class="panel profile-guest"><h2>登入才能保存</h2><p>你目前是訪客。訪客的進度與對戰紀錄在關閉網頁後不會保留，成就、頭像與相框也需要帳號才能解鎖。登入或註冊後，這次的進度會自動併入帳號。</p><button class="primary" id="profile-login">登入 / 註冊</button></section>`;
+    document.querySelector('#back').onclick = home;
+    document.querySelector('#profile-login').onclick = () => document.querySelector('#auth-button').click();
+    return;
+  }
+  const [profile, levels, history] = await Promise.all([api('/api/profile/me'), api('/api/levels'), api('/api/history/me')]);
+  state.user = profile.user; renderAuth();
+  const cleared = new Set(profile.cleared);
+  const nextIndex = levels.findIndex(level => !cleared.has(level.id));
+  const chapterName = new Map(profile.chapters.map(chapter => [chapter.id, chapter.name]));
+  const progressRow = (name, done, total) => `<li class="${total && done === total ? 'done' : ''}"><strong>${escapeHtml(name)}</strong><span class="bar"><i style="width:${total ? Math.round(done / total * 100) : 0}%"></i></span><b>${done} / ${total}</b></li>`;
+  const chapterRows = profile.chapters.filter(chapter => chapter.levelIds.length).map(chapter => progressRow(chapter.name, chapter.levelIds.filter(id => cleared.has(id)).length, chapter.total));
+  const extra = levels.filter(level => !level.chapter);
+  if (extra.length) chapterRows.push(progressRow('其他關卡', extra.filter(level => cleared.has(level.id)).length, extra.length));
+  const nextLevel = nextIndex === -1 ? null : levels[nextIndex];
+  const current = !levels.length ? '關卡正在準備' : !nextLevel ? '全部通關！' : `第 ${String(nextIndex + 1).padStart(3, '0')} 關 · ${escapeHtml(nextLevel.name)}${nextLevel.chapter ? `（${escapeHtml(chapterName.get(nextLevel.chapter) || '')}）` : ''}`;
+  const frameById = new Map(profile.frames.map(frame => [frame.id, frame]));
+  const unlockedCount = profile.achievements.filter(a => a.unlockedAt).length;
+  view.innerHTML = `<section class="page-heading">${back}<p class="eyebrow">PROFILE</p><h1>個人主頁</h1><p>進度、對戰紀錄與成就都在這裡。相框要靠成就解鎖。</p></section>
+    <section class="profile-grid">
+      <article class="panel profile-card"><div class="profile-identity">${avatarHtml(profile.user.avatar, profile.user.frame, 'large')}<div><strong>${escapeHtml(profile.user.displayName)}</strong><small>@${escapeHtml(profile.user.username)}</small></div></div>
+        <form class="profile-name-form" id="profile-name-form"><label for="display-name">顯示名稱</label><input id="display-name" maxlength="20" value="${escapeHtml(profile.user.displayName)}" /><button class="quiet-button" type="submit">儲存</button></form>
+        <p class="eyebrow">AVATAR</p><div class="picker" id="avatar-picker">${profile.avatars.map(avatar => `<button type="button" class="pick ${avatar === (profile.user.avatar || DEFAULT_AVATAR) ? 'selected' : ''}" data-avatar="${escapeHtml(avatar)}">${escapeHtml(avatar)}</button>`).join('')}</div>
+        <p class="eyebrow">FRAME</p><div class="picker" id="frame-picker">${profile.frames.map(frame => `<button type="button" class="pick ${frame.id === (profile.user.frame || 'plain') ? 'selected' : ''} ${frame.unlocked ? '' : 'locked'}" data-frame="${escapeHtml(frame.id)}" ${frame.unlocked ? '' : 'disabled'} title="${escapeHtml(frame.unlocked ? frame.name : `${frame.name}：達成「${frame.achievement}」後解鎖`)}">${avatarHtml(profile.user.avatar, frame.id)}<small>${escapeHtml(frame.name)}</small></button>`).join('')}</div>
+        <small class="profile-message" id="profile-message"></small></article>
+      <article class="panel"><p class="eyebrow">SINGLE PLAYER</p><h2>單人進度</h2><p class="big-number"><b>${levels.filter(level => cleared.has(level.id)).length}</b> / ${levels.length} 關</p><p>目前進行到：<b>${current}</b></p><ol class="chapter-list">${chapterRows.join('') || '<li><span class="empty">難度階梯正在產生。</span></li>'}</ol></article>
+      <article class="panel"><p class="eyebrow">ACHIEVEMENTS</p><h2>成就 <small>${unlockedCount} / ${profile.achievements.length}</small></h2><ul class="achievement-list">${profile.achievements.map(a => `<li class="${a.unlockedAt ? 'unlocked' : 'locked'}"><span class="badge">${a.unlockedAt ? '🏅' : '🔒'}</span><div><strong>${escapeHtml(a.name)}</strong><small>${escapeHtml(a.description)}${a.frame ? ` · 獎勵相框「${escapeHtml(frameById.get(a.frame)?.name || a.frame)}」` : ''}</small>${a.unlockedAt ? `<small class="when">${escapeHtml(matchDate(a.unlockedAt))} 解鎖</small>` : ''}</div></li>`).join('')}</ul></article>
+      <article class="panel profile-history"><p class="eyebrow">MATCH HISTORY</p><h2>歷史比賽 <small>${profile.stats.matches} 場 · ${profile.stats.wins} 次第一</small></h2>${history.length ? `<table class="history-table"><thead><tr><th>日期</th><th>房名</th><th>尺寸</th><th>結果</th></tr></thead><tbody>${history.map(record => `<tr><td>${escapeHtml(matchDate(record.finishedAt))}</td><td>${escapeHtml(record.roomName)}</td><td>${record.size} × ${record.size}</td><td class="${escapeHtml(record.outcome?.status || '')}">${record.outcome ? escapeHtml(outcomeLabel(record.outcome)) : '未完成'}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">還沒有對戰紀錄。</p>'}</article>
+    </section>`;
+  document.querySelector('#back').onclick = home;
+  const message = document.querySelector('#profile-message');
+  const save = async body => {
+    try { const result = await api('/api/profile', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); state.user = result.user; renderAuth(); await showProfile(); document.querySelector('#profile-message').textContent = '已儲存'; }
+    catch (error) { message.textContent = error.message; }
+  };
+  document.querySelector('#profile-name-form').onsubmit = event => { event.preventDefault(); save({ displayName: document.querySelector('#display-name').value }); };
+  document.querySelectorAll('[data-avatar]').forEach(button => button.onclick = () => save({ avatar: button.dataset.avatar }));
+  document.querySelectorAll('[data-frame]').forEach(button => button.onclick = () => save({ frame: button.dataset.frame }));
 }
 
 function showFinishNotice(results) {

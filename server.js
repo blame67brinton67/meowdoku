@@ -6,12 +6,13 @@ const fs = require('fs');
 const path = require('path');
 const cookie = require('cookie');
 const { openDb } = require('./db');
-const { createAuth } = require('./auth');
-const { generatePuzzle, countSolutions, clampSize, parseBoardText } = require('./puzzle');
+const { createAuth, sanitizeDisplayName, DISPLAY_NAME_MAX } = require('./auth');
+const { createAchievements, AVATARS, DEFAULT_AVATAR, DEFAULT_FRAME } = require('./achievements');
+const { generatePuzzle, countSolutions, clampSize, validateBoardText } = require('./puzzle');
 const { generateAsync } = require('./generator');
 const { clampSprintSeconds, clampSprintFactor, normalizeSprintMode, resolveSprintSeconds } = require('./sprint');
 const { rate } = require('./difficulty');
-const { buildLadder, validLadder, LADDER_VERSION, LADDER_LENGTH } = require('./ladder');
+const { buildLadder, validLadder, ladderChapters, chapterOf, LADDER_VERSION, LADDER_LENGTH } = require('./ladder');
 const { findHint, boardKey } = require('./hints');
 const { createHintQuota, jsonFileStore } = require('./hint-quota');
 
@@ -36,11 +37,14 @@ const VISITOR_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const HISTORY_PER_VISITOR = 50, HISTORY_VISITORS = 200;
 const LADDER_PATH = path.join(DATA_DIR, 'ladder.json');
 const HINT_QUOTA_PATH = path.join(DATA_DIR, 'hint-quota.json');
+const LEVEL_ORDER_PATH = path.join(DATA_DIR, 'level-order.json');
+const LEADERBOARD_TOP = 5;
 const rooms = new Map();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const db = openDb(DB_PATH);
 const auth = createAuth(db);
+const achievements = createAchievements(db);
 auth.purgeExpired();
 if (process.env.ADMIN_BOOTSTRAP_USER) {
   if (auth.bootstrapAdmin(process.env.ADMIN_BOOTSTRAP_USER)) console.log(`已將 ${process.env.ADMIN_BOOTSTRAP_USER} 設為管理員`);
@@ -79,6 +83,10 @@ function ensureIdentity(req, res, next) {
   next();
 }
 const isUser = req => req.identity?.kind === 'user';
+function requireUser(req, res, next) {
+  if (!isUser(req)) return res.status(401).json({ error: '登入才能使用個人主頁' });
+  next();
+}
 function requireAdmin(req, res, next) {
   if (!isUser(req)) return res.status(401).json({ error: '請先登入管理員帳號' });
   if (!req.identity.isAdmin) return res.status(403).json({ error: '只有管理員可以管理關卡' });
@@ -126,8 +134,25 @@ function startLadder() {
 }
 // Ordered by rating, so an easy 9 × 9 may sit before a nasty 7 × 7, and admin
 // levels take their place in the same order instead of trailing the ladder.
+// An admin-saved order wins over the rating; levels the saved order does not
+// know yet (new rungs, fresh imports) still slot in by rating.
+let levelOrder = readJson(LEVEL_ORDER_PATH, []).filter(id => typeof id === 'string');
 function singleLevels() {
-  return [...ladder, ...levels].sort((a, b) => (a.rating?.score || 0) - (b.rating?.score || 0) || a.createdAt - b.createdAt);
+  const byRating = [...ladder, ...levels].sort((a, b) => (a.rating?.score || 0) - (b.rating?.score || 0) || a.createdAt - b.createdAt);
+  if (!levelOrder.length) return byRating;
+  const byId = new Map(byRating.map(level => [level.id, level]));
+  const ordered = levelOrder.filter(id => byId.has(id)).map(id => byId.get(id));
+  const listed = new Set(ordered.map(level => level.id));
+  for (const level of byRating) {
+    if (listed.has(level.id)) continue;
+    const score = level.rating?.score || 0;
+    const at = ordered.findIndex(other => (other.rating?.score || 0) > score);
+    ordered.splice(at < 0 ? ordered.length : at, 0, level);
+  }
+  return ordered;
+}
+function saveLevelOrder(ids) {
+  levelOrder = ids; writeJson(LEVEL_ORDER_PATH, ids);
 }
 let multiplayerPuzzlePool = readJson(PUZZLE_POOL_PATH, []);
 const refillingPoolSizes = new Set();
@@ -135,8 +160,10 @@ const MULTIPLAYER_POOL_PER_SIZE = 4;
 function publicLevel(level) {
   const rating = level.rating ? { ...level.rating } : null;
   if (rating) delete rating.solution;
-  return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt, rating };
+  return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt, rating, chapter: Number.isInteger(level.ladderIndex) ? chapterOf(level.ladderIndex).id : null };
 }
+const achievementContext = () => ({ chapters: ladderChapters(ladder) });
+const clampCount = (value, max) => Number.isFinite(Number(value)) ? Math.min(max, Math.max(0, Math.round(Number(value)))) : 0;
 // One puzzle per tick: the pool is refilled without holding up the socket
 // traffic of a match that is already running.
 function refillMultiplayerPool(size) {
@@ -180,8 +207,23 @@ function hintPuzzle(identity, { levelId, matchId }) {
   return null;
 }
 function scoreRows() {
-  const guests = Object.values(readJson(SCORES_PATH, {})).map(({ name, cleared }) => ({ name, cleared: cleared.length }));
-  return [...auth.userLeaderboard(), ...guests].sort((a, b) => b.cleared - a.cleared || a.name.localeCompare(b.name, 'zh-Hant'));
+  const guests = Object.entries(readJson(SCORES_PATH, {})).map(([id, { name, cleared }]) => ({ key: `g:${id}`, name, cleared: cleared.length }));
+  return [...auth.userLeaderboard().map(row => ({ key: `u:${row.id}`, name: row.name, cleared: row.cleared, avatar: row.avatar || DEFAULT_AVATAR, frame: row.frame || DEFAULT_FRAME })), ...guests].sort((a, b) => b.cleared - a.cleared || a.name.localeCompare(b.name, 'zh-Hant'));
+}
+// Competition ranking: equal scores share a rank and the next rank skips.
+// Only accounts get a rank of their own; guests are told to sign in instead.
+function leaderboardFor(identity) {
+  const rows = scoreRows();
+  const rankOf = cleared => rows.filter(row => row.cleared > cleared).length + 1;
+  const myKey = identity?.kind === 'user' ? `u:${identity.id}` : null;
+  const top = rows.slice(0, LEADERBOARD_TOP).map(row => ({ rank: rankOf(row.cleared), name: row.name, cleared: row.cleared, avatar: row.avatar, frame: row.frame, me: row.key === myKey }));
+  let me = null;
+  if (myKey) {
+    const mine = rows.find(row => row.key === myKey);
+    const cleared = mine ? mine.cleared : 0;
+    me = { rank: rankOf(cleared), cleared, total: rows.length + (mine ? 0 : 1), inTop: top.some(row => row.me) };
+  }
+  return { top, total: rows.length, me };
 }
 function clearedFor(identity) {
   if (identity.kind === 'user') return auth.clearedLevels(identity.id);
@@ -239,7 +281,7 @@ app.get('/api/levels/:id', (req, res) => {
   if (!level) return res.status(404).json({ error: '找不到關卡' });
   res.json(level); // Single-player boards need the local answer for instant feedback.
 });
-app.get('/api/leaderboard', (_req, res) => res.json(scoreRows()));
+app.get('/api/leaderboard', (req, res) => res.json(leaderboardFor(req.identity)));
 app.get('/api/public-rooms', (_req, res) => {
   const visibleRooms = [...rooms.values()]
     .filter(room => room.visibility === 'public' && room.status !== 'finished')
@@ -251,6 +293,37 @@ app.get('/api/public-rooms', (_req, res) => {
   res.json(visibleRooms);
 });
 app.get('/api/progress/me', ensureIdentity, (req, res) => res.json({ cleared: clearedFor(req.identity) }));
+// Guests see the catalogue with nothing unlocked; nothing here needs a session.
+app.get('/api/achievements/me', (req, res) => res.json(achievements.listFor(isUser(req) ? req.identity.id : null)));
+app.get('/api/profile/me', requireUser, (req, res) => {
+  res.json({
+    ...publicIdentity(req.identity), avatars: AVATARS, chapters: ladderChapters(ladder), cleared: auth.clearedLevels(req.identity.id),
+    ...achievements.listFor(req.identity.id), stats: achievements.matchStats(req.identity.id)
+  });
+});
+// Raw input is bounded before sanitizing so a 1 MB name is refused, not scanned.
+const PROFILE_FIELD_MAX = 200;
+const applyProfile = db.transaction((userId, writes) => { for (const write of writes) write(); });
+app.post('/api/profile', requireUser, (req, res) => {
+  const { displayName, avatar, frame } = req.body || {};
+  const writes = [];
+  if (displayName !== undefined) {
+    if (typeof displayName !== 'string' || displayName.length > PROFILE_FIELD_MAX) return res.status(400).json({ error: `顯示名稱太長（最多 ${DISPLAY_NAME_MAX} 字）` });
+    const clean = sanitizeDisplayName(displayName);
+    if (!clean) return res.status(400).json({ error: `顯示名稱不能是空的（最多 ${DISPLAY_NAME_MAX} 字）` });
+    writes.push(() => auth.setDisplayName(req.identity.id, clean));
+  }
+  if (avatar !== undefined) {
+    if (typeof avatar !== 'string' || !AVATARS.includes(avatar)) return res.status(400).json({ error: '這不是內建的頭像' });
+    writes.push(() => auth.setAvatar(req.identity.id, avatar));
+  }
+  if (frame !== undefined) {
+    if (typeof frame !== 'string' || frame.length > PROFILE_FIELD_MAX || !achievements.frameUnlocked(req.identity.id, frame)) return res.status(403).json({ error: '這個相框尚未解鎖' });
+    writes.push(() => auth.setFrame(req.identity.id, frame));
+  }
+  applyProfile(req.identity.id, writes);
+  res.json({ user: auth.userById(req.identity.id) });
+});
 app.get('/api/history/me', ensureIdentity, (req, res) => res.json(historyFor(req.identity)));
 // Legacy read-only paths keyed by the browser-generated visitorId, kept so the
 // JSON records from before accounts can still be looked at.
@@ -284,7 +357,7 @@ app.post('/api/hints', ensureIdentity, (req, res) => {
   res.json({ hint, quota: charge, charged: true });
 });
 app.post('/api/single-complete', ensureIdentity, (req, res) => {
-  const { name, levelId } = req.body || {};
+  const { name, levelId, ms, mistakes } = req.body || {};
   const list = singleLevels();
   const levelIndex = list.findIndex(level => level.id === levelId);
   if (!name || levelIndex < 0) return res.status(400).json({ error: '資料不完整' });
@@ -293,8 +366,12 @@ app.post('/api/single-complete', ensureIdentity, (req, res) => {
   // level has since sorted in between it and the rung below.
   if (levelIndex > 0 && !cleared.includes(levelId) && !cleared.includes(list[levelIndex - 1].id)) return res.status(403).json({ error: '請先完成前一關' });
   if (isUser(req)) {
-    auth.clearLevel(req.identity.id, levelId);
-    return res.json({ ok: true, cleared: auth.clearedLevels(req.identity.id).length });
+    // The board is solved client-side, so timing and mistakes can only come
+    // from the client; they are bounded here and only feed achievements.
+    const stats = { ms: Number.isFinite(Number(ms)) && Number(ms) > 0 ? Math.round(Number(ms)) : null, hints: 0, mistakes: clampCount(mistakes, 999) };
+    const unlocked = achievements.record(req.identity.id, achievementContext(), { kind: 'single', levelId, size: list[levelIndex].size, ms: stats.ms ?? Infinity, mistakes: stats.mistakes, hints: stats.hints },
+      () => auth.clearLevel(req.identity.id, levelId, stats));
+    return res.json({ ok: true, cleared: auth.clearedLevels(req.identity.id).length, unlocked });
   }
   const scores = readJson(SCORES_PATH, {});
   const entry = scores[req.identity.id] || { name: '', cleared: [] };
@@ -309,25 +386,50 @@ app.post('/api/admin/levels', requireAdmin, async (req, res) => {
     const puzzle = await generateAsync(req.body?.size);
     const level = { id: nanoid(8), name: String(req.body?.name || `${puzzle.size} × ${puzzle.size} 新關卡`).slice(0, 40), createdAt: Date.now(), ...puzzle, rating: rate(puzzle) };
     levels = [...levels, level]; writeJson(LEVELS_PATH, levels);
-    res.status(201).json(publicLevel(level));
+    res.status(201).json(adminLevel(level));
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
+// Admins see the answer in the preview; the public catalogue never does.
+const adminLevel = level => ({ ...publicLevel(level), solution: level.solution });
+function checkBoardText(text, expectedSize) {
+  if (typeof text !== 'string') return { errors: ['地圖文字必須是文字格式。'], puzzle: null };
+  if (text.length > 8192) return { errors: ['地圖文字不得超過 8 KB。'], puzzle: null };
+  const { errors, puzzle } = validateBoardText(text);
+  const size = Number(expectedSize), found = text.split(/\r?\n/).filter(line => line.trim()).length - 1;
+  if (size && found !== size) return { errors: [`尺寸不符：選擇的是 ${size} × ${size}，地圖卻是 ${found} × ${found}。`, ...errors], puzzle: null };
+  return { errors, puzzle };
+}
+// Dry run: the same checks as import, every problem listed, nothing saved.
+app.post('/api/admin/levels/validate', requireAdmin, (req, res) => {
+  const { errors, puzzle } = checkBoardText(req.body?.text, req.body?.size);
+  if (errors.length) return res.status(400).json({ ok: false, errors, error: errors[0] });
+  const rating = rate(puzzle); delete rating.solution;
+  res.json({ ok: true, errors: [], size: puzzle.size, regions: puzzle.regions, solution: puzzle.solution, rating });
+});
 app.post('/api/admin/levels/import', requireAdmin, (req, res) => {
-  const text = req.body?.text;
-  if (typeof text !== 'string') return res.status(400).json({ error: '地圖文字必須是文字格式。' });
-  if (text.length > 8192) return res.status(400).json({ error: '地圖文字不得超過 8 KB。' });
-  let puzzle;
-  try { puzzle = parseBoardText(text); } catch (error) { return res.status(400).json({ error: error.message }); }
+  const { errors, puzzle } = checkBoardText(req.body?.text, req.body?.size);
+  if (errors.length) return res.status(400).json({ errors, error: errors[0] });
   const level = { id: nanoid(8), name: String(req.body?.name || `${puzzle.size} × ${puzzle.size} 匯入關卡`).slice(0, 40), createdAt: Date.now(), ...puzzle, rating: rate(puzzle) };
   levels = [...levels, level]; writeJson(LEVELS_PATH, levels);
-  res.status(201).json(publicLevel(level));
+  res.status(201).json(adminLevel(level));
+});
+// The whole sequence is saved, so a level moved by hand stays put even when
+// its neighbours are re-rated; unknown or missing ids are rejected outright.
+app.put('/api/admin/levels/order', requireAdmin, (req, res) => {
+  const ids = req.body?.ids;
+  const current = singleLevels().map(level => level.id);
+  if (!Array.isArray(ids) || ids.length !== current.length || new Set(ids).size !== ids.length || !ids.every(id => typeof id === 'string' && current.includes(id))) {
+    return res.status(400).json({ error: '關卡順序必須包含每一個現有關卡，且不能重複。' });
+  }
+  saveLevelOrder(ids);
+  res.json(singleLevels().map(publicLevel));
 });
 
 function leaderboardRows(room) {
   const players = new Map();
   for (const record of room.leaderboard) {
     const current = players.get(record.playerId);
-    if (!current) players.set(record.playerId, { playerId: record.playerId, name: record.name, ms: record.ms, round: record.round, wins: record.won ? 1 : 0 });
+    if (!current) players.set(record.playerId, { playerId: record.playerId, name: record.name, avatar: record.avatar, frame: record.frame, ms: record.ms, round: record.round, wins: record.won ? 1 : 0 });
     else {
       current.wins += record.won ? 1 : 0;
       if (record.ms < current.ms) { current.ms = record.ms; current.round = record.round; current.name = record.name; }
@@ -345,7 +447,7 @@ function compactRoom(room) {
     countdownEnds: room.countdownEnds, deadline: room.deadline, sprintMode: room.sprintMode, sprintSeconds: room.sprintSeconds, sprintFactor: room.sprintFactor,
     leaderboard: leaderboardRows(room),
     players: [...room.players.values()].map(player => ({
-      id: player.id, name: player.name, host: player.id === room.hostId, spectator: player.spectator, idle: player.idle, alive: player.alive,
+      id: player.id, name: player.name, avatar: player.avatar, frame: player.frame, host: player.id === room.hostId, spectator: player.spectator, idle: player.idle, alive: player.alive,
       found: player.found.size, completedAt: player.completedAt,
       cats: [...player.found], marks: [...player.marks], wrong: [...player.wrong]
     }))
@@ -417,7 +519,11 @@ function recordMatchHistory(room) {
       time: player.completedAt ? ((player.completedAt - room.startedAt) / 1000).toFixed(1) : null,
       cats: player.found.size, wrong: [...player.wrong]
     } };
-    if (player.kind === 'user') { auth.recordMatch(player.id, record); continue; }
+    if (player.kind === 'user') {
+      const unlocked = achievements.record(player.id, achievementContext(), { kind: 'match', size: room.puzzle.size, rank: record.outcome.rank, status: record.outcome.status }, () => auth.recordMatch(player.id, record));
+      if (unlocked.length && player.socketId) io.to(player.socketId).emit('achievements-unlocked', unlocked);
+      continue;
+    }
     guestsTouched = true;
     history[player.id] = [record, ...(history[player.id] || [])].slice(0, HISTORY_PER_VISITOR);
   }
@@ -495,7 +601,7 @@ io.on('connection', socket => {
     player.found.add(`${row}:${col}`); socket.emit('guess-result', { row, col, hit: true });
     if (player.found.size === room.puzzle.size) {
       player.completedAt = Date.now();
-      room.leaderboard.push({ playerId: player.id, name: player.name, ms: player.completedAt - room.startedAt, at: player.completedAt, round: room.round, won: !room.leaderboard.some(record => record.round === room.round && record.won) });
+      room.leaderboard.push({ playerId: player.id, name: player.name, avatar: player.avatar, frame: player.frame, ms: player.completedAt - room.startedAt, at: player.completedAt, round: room.round, won: !room.leaderboard.some(record => record.round === room.round && record.won) });
       if (room.leaderboard.length > 200) room.leaderboard.splice(0, room.leaderboard.length - 200);
       if (allPlayersResolved(room)) { finishRoom(room); return; }
       if (!room.deadline) {
@@ -609,11 +715,14 @@ io.on('connection', socket => {
 });
 function joinRoom(socket, room, { name, playerId, kind, spectator }) {
   for (const existing of room.players.values()) if (existing.id === playerId) { clearTimeout(existing.idleTimer); room.players.delete(existing.id); }
-  const player = { id: playerId, kind, name: String(name || '神秘貓奴').slice(0, 20), spectator, socketId: socket.id, idle: false, disconnectedAt: null, idleTimer: null, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
+  // Looked up fresh rather than from the handshake identity, so a frame picked
+  // on the profile page shows up in the next room without reconnecting.
+  const user = kind === 'user' ? auth.userById(playerId) : null;
+  const player = { id: playerId, kind, name: String(name || '神秘貓奴').slice(0, 20), avatar: user?.avatar || DEFAULT_AVATAR, frame: user?.frame || DEFAULT_FRAME, spectator, socketId: socket.id, idle: false, disconnectedAt: null, idleTimer: null, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
   room.players.set(playerId, player); socket.join(room.code); socket.emit('chat-backlog', room.chat); emitRoom(room); checkAllSpectator(room);
   if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
 }
 
 if (require.main === module) server.listen(PORT, () => { console.log(`MeowDoku is ready at http://localhost:${PORT}`); startLadder(); });
 
-module.exports = { app, server, io, db, auth, rooms };
+module.exports = { app, server, io, db, auth, achievements, rooms };
