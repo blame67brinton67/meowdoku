@@ -388,6 +388,7 @@ function applyMark(cell, shouldMark) {
   if (cell.classList.contains('cat') || cell.classList.contains('wrong')) return;
   const key = `${cell.dataset.row}:${cell.dataset.col}`;
   if (shouldMark) state.marks.add(key); else state.marks.delete(key);
+  clearHint();
   cell.classList.toggle('mark', shouldMark); cell.textContent = shouldMark ? '×' : '';
   if (state.mode === 'multi') queueMarksSync();
 }
