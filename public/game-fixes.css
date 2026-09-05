@@ -134,6 +134,15 @@
 .chat-form textarea { flex: 1; min-width: 0; resize: none; padding: 9px 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, .8); font-size: 13px; line-height: 1.45; }
 .chat-form textarea:focus { border-color: var(--teal); }
 .chat-notice { display: block; min-height: 16px; margin-top: 6px; color: var(--orange); font-size: 11px; }
+.theme-presets { margin: 16px 0 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.theme-presets legend { padding: 0 5px; color: var(--muted); font-size: 12px; }
+#theme-preset-list { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+[data-theme-preset] { display: grid; gap: 5px; padding: 7px 6px; border: 2px solid var(--line); border-radius: 10px; background: var(--paper-swatch); font-size: 12px; font-weight: 700; color: #2a2c33; transition: border-color .18s, transform .18s; }
+[data-theme-preset]:hover { transform: translateY(-1px); border-color: var(--orange); }
+[data-theme-preset][aria-checked="true"] { border-color: var(--orange); box-shadow: 0 0 0 2px rgba(234, 98, 56, .25); }
+.preset-swatches { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; }
+.preset-swatches i { display: block; height: 14px; border-radius: 3px; }
+.theme-preset-hint { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
 .theme-colors { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 12px; margin: 16px 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .theme-colors legend { padding: 0 5px; color: var(--muted); font-size: 12px; }
 .theme-colors label { display: grid; gap: 4px; margin: 0; font-size: 12px; }
@@ -181,6 +190,21 @@
   .mode-card, .catalog-card, .lobby-card, .public-room, .primary, .dark-button, .light-button, .quiet-button { transition: none; }
   .mode-card:hover, .catalog-card:hover, .lobby-card:hover, .public-room:hover, .primary:hover, .dark-button:hover, .light-button:hover, .quiet-button:hover { transform: none; }
 }
+
+/* Solo hints: the focus is painted with classes on the cells that already exist, so a hint never rebuilds the board. */
+.hint-panel { margin-top: 12px; }
+.hint-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.hint-note { color: var(--orange); font-size: 12px; }
+.hint-card { margin-top: 12px; padding: 16px 18px; border-radius: var(--radius-sm); background: linear-gradient(160deg, #fff8e6, #fdefcc); box-shadow: inset 0 0 0 1px rgba(234, 98, 56, .22); }
+.hint-card .eyebrow { margin-bottom: 6px; }
+.hint-tier { margin: 6px 0; font-size: 14px; line-height: 1.7; }
+.hint-tier + .hint-tier { padding-top: 6px; border-top: 1px dashed rgba(30, 32, 41, .12); }
+.hint-card .link-button { padding: 4px 0 0; color: var(--teal); }
+.board.hinting .cell:not(.hl-unit):not(.hl-cell) { filter: saturate(.35) brightness(.78); }
+.cell.hl-unit { box-shadow: inset 0 0 0 3px rgba(255, 255, 255, .85); }
+.cell.hl-cell { box-shadow: inset 0 0 0 4px #ffd447, 0 0 0 2px rgba(255, 212, 71, .6); animation: hint-pulse 1.1s ease-in-out infinite; }
+@keyframes hint-pulse { 50% { box-shadow: inset 0 0 0 4px #fff2b0, 0 0 12px 4px rgba(255, 212, 71, .75); } }
+
 .person-row { display: flex; align-items: center; gap: 4px; }
 .person-row .person { flex: 1; min-width: 0; }
 .kick-button { border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; padding: 3px 8px; white-space: nowrap; }

@@ -225,56 +225,89 @@ function decodeAnswerLine(line) {
   if (!/^[A-Za-z0-9+/]+=*$/.test(encoded)) throw new Error('答案行的編碼格式不正確。');
   return Buffer.from(encoded, 'base64').toString('utf8').trim();
 }
-function parseBoardText(text) {
-  if (typeof text !== 'string') throw new Error('地圖文字必須是文字格式。');
-  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+// Every problem is reported, not just the first: an admin fixing a hand-typed
+// board wants the whole list. Checks that depend on a broken earlier stage
+// (a malformed row makes region checks meaningless) are skipped instead.
+function validateBoardText(text) {
+  const errors = [];
+  if (typeof text !== 'string') return { errors: ['地圖文字必須是文字格式。'], puzzle: null };
+    const lines = text.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
   if (lines.length < MIN_SIZE + 1 || lines.length > MAX_SIZE + 1) {
-    throw new Error(`地圖需要 ${MIN_SIZE + 1} 至 ${MAX_SIZE + 1} 行非空文字。`);
+    return { errors: [`地圖需要 ${MIN_SIZE + 1} 至 ${MAX_SIZE + 1} 行非空文字（目前 ${lines.length} 行）。`], puzzle: null };
   }
   const size = lines.length - 1;
   function values(line, lineNumber) {
     const compact = line.match(/^\d+$/);
     const parts = compact && size <= 9 ? [...line] : line.split(/[ \t]+/);
-    if (parts.length !== size) throw new Error(`第 ${lineNumber} 行必須有 ${size} 個數值。`);
-    if (!parts.every(part => /^\d+$/.test(part))) throw new Error(`第 ${lineNumber} 行包含無效的整數。`);
+    if (parts.length !== size) { errors.push(`第 ${lineNumber} 行必須有 ${size} 個數值（目前 ${parts.length} 個）。`); return null; }
+    if (!parts.every(part => /^\d+$/.test(part))) { errors.push(`第 ${lineNumber} 行包含無效的整數。`); return null; }
     return parts.map(Number);
   }
   const grid = lines.slice(0, size).map((line, index) => values(line, index + 1));
-  const answer = values(decodeAnswerLine(lines[size]), size + 1);
-  for (const row of grid) for (const region of row) {
-    if (region < 1 || region > size) throw new Error(`區域編號必須介於 1 和 ${size} 之間。`);
-  }
-  const regions = grid.flat().map(region => region - 1);
-  const used = new Set(regions);
-  if (used.size !== size) throw new Error('地圖必須使用每一個區域編號，不能跳號。');
-  for (let region = 0; region < size; region++) {
-    const start = regions.indexOf(region), seen = new Set([start]), queue = [start];
-    while (queue.length) for (const next of neighbors(queue.pop(), size)) {
-      if (regions[next] !== region || seen.has(next)) continue;
-      seen.add(next); queue.push(next);
-    }
-    if (seen.size !== regions.filter(value => value === region).length) throw new Error(`區域 ${region + 1} 必須是正交連通的。`);
-  }
-  if (new Set(answer).size !== size || answer.some(column => column < 1 || column > size)) {
-    throw new Error(`答案必須是 1 到 ${size} 的不重複排列。`);
-  }
-  const solution = answer.map((column, row) => ({ row, col: column - 1 }));
-  const regionCounts = new Uint8Array(size);
-  for (let row = 0; row < size; row++) {
-    const col = solution[row].col;
-    regionCounts[regions[row * size + col]]++;
-    for (const [dr, dc] of [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]]) {
-      const nextRow = row + dr, nextCol = col + dc;
-      if (nextRow >= 0 && nextRow < size && nextCol >= 0 && nextCol < size && solution[nextRow].col === nextCol) {
-        throw new Error('答案中的貓咪不能在八方向相鄰。');
+  let answer = null;
+  try { answer = values(decodeAnswerLine(lines[size]), size + 1); } catch (error) { errors.push(error.message); }
+  let regions = null, solution = null, solvable = true;
+  if (grid.every(Boolean)) {
+    grid.forEach((row, r) => row.forEach((region, c) => {
+      if (region < 1 || region > size) errors.push(`第 ${r + 1} 行第 ${c + 1} 格：區域編號必須介於 1 和 ${size} 之間（目前 ${region}）。`);
+    }));
+    if (!errors.some(error => error.includes('區域編號'))) {
+      regions = grid.flat().map(region => region - 1);
+      const used = new Set(regions);
+      const missing = [];
+      for (let region = 0; region < size; region++) if (!used.has(region)) missing.push(region + 1);
+      if (missing.length) { errors.push(`地圖必須使用每一個區域編號，不能跳號（缺少區域 ${missing.join('、')}）。`); solvable = false; }
+      for (let region = 0; region < size; region++) {
+        const start = regions.indexOf(region);
+        if (start < 0) continue;
+        const seen = new Set([start]), queue = [start];
+        while (queue.length) for (const next of neighbors(queue.pop(), size)) {
+          if (regions[next] !== region || seen.has(next)) continue;
+          seen.add(next); queue.push(next);
+        }
+        const total = regions.filter(value => value === region).length;
+        if (seen.size !== total) {
+          const stray = regions.map((value, cell) => value === region && !seen.has(cell) ? `第 ${Math.floor(cell / size) + 1} 行第 ${cell % size + 1} 格` : null).filter(Boolean);
+          errors.push(`區域 ${region + 1} 必須是正交連通的（${stray.slice(0, 4).join('、')}${stray.length > 4 ? ' 等' : ''}與主體不相連）。`);
+          solvable = false;
+        }
       }
     }
   }
-  if (regionCounts.some(count => count !== 1)) throw new Error('答案必須在每個區域各放一隻貓。');
-  const solutions = countSolutions(regions, size, 2);
-  if (!solutions) throw new Error('地圖規則互相矛盾，沒有可行答案。');
-  if (solutions > 1) throw new Error('地圖不唯一，存在兩組以上可行答案。');
-  return { size, regions, solution };
+  if (answer) {
+    const outOfRange = answer.map((column, row) => column < 1 || column > size ? row + 1 : null).filter(Boolean);
+    const seenColumns = new Map();
+    answer.forEach((column, row) => { if (!seenColumns.has(column)) seenColumns.set(column, []); seenColumns.get(column).push(row + 1); });
+    const duplicates = [...seenColumns].filter(([, rows]) => rows.length > 1);
+    if (outOfRange.length || duplicates.length) {
+      const detail = [...outOfRange.map(row => `第 ${row} 行的數值超出範圍`), ...duplicates.map(([column, rows]) => `第 ${rows.join('、')} 行的貓都在第 ${column} 列`)];
+      errors.push(`答案必須是 1 到 ${size} 的不重複排列（${detail.join('；')}）。`);
+    } else {
+      solution = answer.map((column, row) => ({ row, col: column - 1 }));
+      for (let row = 0; row < size - 1; row++) {
+        if (Math.abs(solution[row].col - solution[row + 1].col) <= 1) errors.push(`答案中的貓咪不能在八方向相鄰（第 ${row + 1} 行第 ${solution[row].col + 1} 格與第 ${row + 2} 行第 ${solution[row + 1].col + 1} 格）。`);
+      }
+      if (regions) {
+        const catsIn = Array.from({ length: size }, () => []);
+        solution.forEach(cat => catsIn[regions[cat.row * size + cat.col]].push(cat.row + 1));
+        const wrong = catsIn.map((rows, region) => rows.length === 1 ? null : rows.length ? `區域 ${region + 1} 有 ${rows.length} 隻（第 ${rows.join('、')} 行）` : `區域 ${region + 1} 沒有貓`).filter(Boolean);
+        if (wrong.length) errors.push(`答案必須在每個區域各放一隻貓（${wrong.join('；')}）。`);
+      }
+    }
+  }
+  // Counting solutions on a malformed region map would only echo the errors
+  // already listed above.
+  if (regions && solvable) {
+    const solutions = countSolutions(regions, size, 2);
+    if (!solutions) errors.push('地圖規則互相矛盾，沒有可行答案。');
+    if (solutions > 1) errors.push('地圖不唯一，存在兩組以上可行答案。');
+  }
+  return { errors, puzzle: errors.length ? null : { size, regions, solution } };
+}
+function parseBoardText(text) {
+  const { errors, puzzle } = validateBoardText(text);
+  if (errors.length) throw new Error(errors[0]);
+  return puzzle;
 }
 // Keep in sync with formatPuzzleText in public/app.js.
 function formatBoardText(puzzle, { encodeAnswer = false } = {}) {
@@ -285,4 +318,4 @@ function formatBoardText(puzzle, { encodeAnswer = false } = {}) {
   return rows.join('\n');
 }
 
-module.exports = { generatePuzzle, countSolutions, findSolutions, clampSize, MIN_SIZE, MAX_SIZE, parseBoardText, formatBoardText, encodeAnswerLine, decodeAnswerLine, ANSWER_PREFIX, ANSWER_NOTE };
+module.exports = { generatePuzzle, countSolutions, findSolutions, clampSize, MIN_SIZE, MAX_SIZE, parseBoardText, validateBoardText, formatBoardText, encodeAnswerLine, decodeAnswerLine, ANSWER_PREFIX, ANSWER_NOTE };
