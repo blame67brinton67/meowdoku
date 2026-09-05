@@ -5,7 +5,7 @@ const state = {
   visitorId: localStorage.visitorId || crypto.randomUUID(),
   name: localStorage.meowdokuName || '',
   mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false,
-  touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: ''
+  touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: '', pane: 'board'
 };
 localStorage.visitorId = state.visitorId;
 const anonymousTag = localStorage.meowdokuAnonTag || String(Math.floor(Math.random() * 9000) + 1000);
@@ -60,10 +60,10 @@ const matchDate = value => new Date(value).toLocaleString('zh-Hant', { month: 'n
 const outcomeLabel = outcome => outcome.status === 'solved' ? `第 ${outcome.rank} 名 · ${outcome.time}s` : outcome.status === 'eliminated' ? '被淘汰' : '時間到未完成';
 
 document.querySelector('#home-button').addEventListener('click', home);
-document.querySelector('#admin-button').addEventListener('click', () => { document.querySelector('#admin-message').textContent = ''; document.querySelector('#admin-dialog').showModal(); });
-document.querySelector('#admin-dialog .close').addEventListener('click', () => document.querySelector('#admin-dialog').close());
-document.querySelector('#theme-button').addEventListener('click', () => { syncThemeInputs(); document.querySelector('#theme-dialog').showModal(); });
-document.querySelector('#theme-dialog .close').addEventListener('click', () => document.querySelector('#theme-dialog').close());
+document.querySelector('#admin-button').addEventListener('click', event => { document.querySelector('#admin-message').textContent = ''; openDialog(document.querySelector('#admin-dialog'), event.currentTarget); });
+document.querySelector('#theme-button').addEventListener('click', event => { syncThemeInputs(); openDialog(document.querySelector('#theme-dialog'), event.currentTarget); });
+document.querySelectorAll('dialog .close').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
+bindTooltips(); bindSprintDialog();
 document.querySelectorAll('[data-theme-palette]').forEach(input => input.addEventListener('input', () => { theme.palette[Number(input.dataset.themePalette)] = input.value; saveTheme(); applyTheme(); }));
 document.querySelectorAll('[data-theme-key]').forEach(input => input.addEventListener('input', () => { theme[input.dataset.themeKey] = input.value; saveTheme(); applyTheme(); }));
 document.querySelector('#reset-theme').addEventListener('click', () => { theme.palette = DEFAULT_PALETTE.slice(); theme.boardLine = DEFAULT_THEME.boardLine; theme.paper = DEFAULT_THEME.paper; saveTheme(); syncThemeInputs(); applyTheme(); });
@@ -94,12 +94,12 @@ async function home() {
   const nextIndex = levels.findIndex(level => !state.cleared.has(level.id));
   const nextLevel = levels[nextIndex === -1 ? levels.length - 1 : nextIndex] || null;
   const continueLabel = !nextLevel ? '關卡正在準備' : nextIndex === -1 ? '全部通關！再玩一次' : `第 ${String(nextIndex + 1).padStart(3, '0')} 關`;
-  view.innerHTML = `
+  view.innerHTML = `<div class="home">
     <section class="hero"><div><p class="eyebrow">A LITTLE LOGIC GAME</p><h1>幫每隻貓咪<br><em>找到牠的地盤</em></h1><p>每行、每列與每個色塊都只能住一隻貓。不要點錯，貓咪的尊嚴很脆弱。</p></div><div class="hero-cat" aria-hidden="true">=^･ω･^=</div></section>
     <section class="mode-grid"><article class="mode-card solo"><span class="mode-icon">⌁</span><p class="eyebrow">SOLO MODE</p><h2>獨自推理</h2><p>挑一個關卡，慢慢找到唯一的答案。</p><button class="primary" id="open-solo">選擇關卡</button></article>
     <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><button class="dark-button" id="open-multi">進入多人遊戲</button><button class="link-button" id="open-history">對戰紀錄（重新解題）</button></article></section>
     <section class="lower-grid"><article class="panel continue-panel"><div><p class="eyebrow">SINGLE PLAYER</p><h2>接著挑戰</h2><p>${!nextLevel ? '難度階梯正在產生，稍等幾秒再回來。' : nextIndex === -1 ? '所有罐罐都找到了，真是傳奇貓奴。' : '解完前一關，下一盒罐罐正在等你。'}</p></div><div class="continue-level"><span>${continueLabel}</span><strong>${nextLevel ? escapeHtml(nextLevel.name) : '尚未有關卡'}</strong><small>${nextLevel ? `${nextLevel.size} × ${nextLevel.size}` : '貓咪還在畫地圖'}</small>${nextLevel ? ratingLine(nextLevel.rating) : ''}</div><button class="primary" id="continue-solo" ${nextLevel ? '' : 'disabled'}>${nextIndex === -1 ? '再次挑戰 →' : '繼續解題 →'}</button><button class="link-button" id="open-solo-2">查看全部關卡</button></article>
-    <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.length ? `<ol>${leaderboard.slice(0, 5).map((entry, i) => `<li><span>${i + 1}</span><strong>${escapeHtml(entry.name)}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}</article></section>`;
+    <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.length ? `<ol>${leaderboard.slice(0, 5).map((entry, i) => `<li><span>${i + 1}</span><strong>${escapeHtml(entry.name)}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}</article></section></div>`;
   document.querySelector('#open-solo').onclick = showLevels; document.querySelector('#open-solo-2').onclick = showLevels;
   document.querySelector('#open-multi').onclick = showMultiplayer;
   document.querySelector('#open-history').onclick = showHistory;
@@ -109,12 +109,12 @@ async function showLevels() {
   const [levels, progress] = await Promise.all([api('/api/levels'), api(`/api/progress/${state.visitorId}`)]);
   state.levels = levels; state.cleared = new Set(progress.cleared); state.mode = 'levels';
   const clearedCount = levels.filter(level => state.cleared.has(level.id)).length;
-  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">SOLO MODE</p><h1>一步一腳印解鎖</h1><p>已通過 <b>${clearedCount}</b> / ${levels.length} 關。關卡依難度排序，完成前一關才能打開下一盒罐罐。</p></section>${levels.length ? '' : '<section class="panel"><p class="empty">難度階梯正在產生，稍等幾秒再重新整理。</p></section>'}<section class="level-catalog">${levels.map((level, index) => {
+  view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">SOLO MODE</p><h1>一步一腳印解鎖</h1><p>已通過 <b>${clearedCount}</b> / ${levels.length} 關。關卡依難度排序，完成前一關才能打開下一盒罐罐。</p></section><div class="page-body">${levels.length ? '' : '<section class="panel"><p class="empty">難度階梯正在產生，稍等幾秒再重新整理。</p></section>'}<section class="level-catalog">${levels.map((level, index) => {
     // A level already cleared stays replayable even when a newly rated level
     // sorts in front of it and pushes an uncleared board in between.
     const cleared = state.cleared.has(level.id), unlocked = cleared || index === 0 || state.cleared.has(levels[index - 1].id);
     return `<article class="catalog-card ${cleared ? 'cleared' : ''} ${unlocked ? '' : 'locked-level'}"><span>LEVEL ${String(index + 1).padStart(3, '0')}</span><h2>${escapeHtml(level.name)}</h2><p>${level.size} × ${level.size}，${level.size} 隻貓咪</p>${ratingLine(level.rating)}<button class="primary" ${unlocked ? `data-level="${level.id}"` : 'disabled'}>${cleared ? '✓ 已通過，再玩一次' : unlocked ? '開始推理' : '🔒 尚未解鎖'}</button></article>`;
-  }).join('')}</section>`;
+  }).join('')}</section></div></div>`;
   document.querySelector('#back').onclick = home; document.querySelectorAll('[data-level]').forEach(button => button.onclick = () => startSingle(button.dataset.level));
 }
 async function startSingle(id) {
@@ -124,7 +124,7 @@ async function startSingle(id) {
 async function showHistory() {
   const records = await api(`/api/history/${state.visitorId}`);
   state.mode = 'history'; state.room = null; state.practice = null;
-  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MATCH HISTORY</p><h1>對戰紀錄</h1><p>點選任一場對戰，重新打開那張地圖慢慢解。練習不計入單人進度與排行榜。</p></section><section class="level-catalog">${records.length ? records.map(record => `<article class="catalog-card"><span>${escapeHtml(matchDate(record.finishedAt))} · ROOM ${escapeHtml(record.code)}</span><h2>${escapeHtml(record.roomName)}</h2><p>${record.size} × ${record.size}，你：${escapeHtml(outcomeLabel(record.outcome))}；冠軍：${record.results[0] ? `${escapeHtml(record.results[0].name)} ${record.results[0].time}s` : '無人完成'}</p><button class="primary" data-match="${escapeHtml(record.matchId)}">重新解這張圖</button></article>`).join('') : '<p class="empty">還沒有對戰紀錄。去多人房間跑一場，這裡就會留下地圖。</p>'}</section>`;
+  view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MATCH HISTORY</p><h1>對戰紀錄</h1><p>點選任一場對戰，重新打開那張地圖慢慢解。練習不計入單人進度與排行榜。</p></section><div class="page-body"><section class="level-catalog">${records.length ? records.map(record => `<article class="catalog-card"><span>${escapeHtml(matchDate(record.finishedAt))} · ROOM ${escapeHtml(record.code)}</span><h2>${escapeHtml(record.roomName)}</h2><p>${record.size} × ${record.size}，你：${escapeHtml(outcomeLabel(record.outcome))}；冠軍：${record.results[0] ? `${escapeHtml(record.results[0].name)} ${record.results[0].time}s` : '無人完成'}</p><button class="primary" data-match="${escapeHtml(record.matchId)}">重新解這張圖</button></article>`).join('') : '<p class="empty">還沒有對戰紀錄。去多人房間跑一場，這裡就會留下地圖。</p>'}</section></div></div>`;
   document.querySelector('#back').onclick = home;
   document.querySelectorAll('[data-match]').forEach(button => button.onclick = () => startPractice(records.find(record => record.matchId === button.dataset.match)));
 }
@@ -148,9 +148,10 @@ function renderGame(message = '') {
   // they can switch to any remaining player's live board.
   const isViewing = Boolean(isSpectator || me?.alive === false || me?.completedAt);
   const waitingForRoom = state.mode === 'multi' && (room.status === 'lobby' || room.status === 'countdown');
-  const footer = soloMode()
-    ? `<p class="hint">左鍵放置貓咪；右鍵標記叉叉。右鍵拖曳可以快速標記。${state.mode === 'practice' ? '這是練習，點錯不會結束，繼續推理就好。' : ''}</p>`
-    : `<p class="hint">${room.status === 'countdown' ? '準備好了嗎？所有玩家會同時開局。' : waitingForRoom ? '房主按下開始前，地圖會保持保密。' : isViewing ? '點選右側玩家名稱，即可查看他的即時棋盤與標記。' : '左鍵確認貓咪，點錯就淘汰；右鍵僅作個人筆記。'}</p>`;
+  const hintText = soloMode()
+    ? `左鍵放置貓咪；右鍵標記叉叉。右鍵拖曳可以快速標記。${state.mode === 'practice' ? '這是練習，點錯不會結束，繼續推理就好。' : ''}`
+    : room.status === 'countdown' ? '準備好了嗎？所有玩家會同時開局。' : waitingForRoom ? '房主按下開始前，地圖會保持保密。' : isViewing ? '點選玩家列表中的名稱，即可查看他的即時棋盤與標記。' : '左鍵確認貓咪，點錯就淘汰；右鍵僅作個人筆記。';
+  const hint = `<span class="hint-wrap"><button type="button" class="hint-dot" aria-label="操作說明" aria-describedby="tip-game" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-game">${hintText}</span></span>`;
   const boardArea = waitingForRoom
     ? `<div class="hidden-map"><span>${room.status === 'countdown' ? '<b data-countdown="' + room.countdownEnds + '">3</b>' : '♟'}</span><h2>${room.status === 'countdown' ? '即將開始！' : '地圖已封印'}</h2><p>${room.status === 'countdown' ? '倒數結束後，題目會同時揭曉。' : '房主開始遊戲後，所有人會同時看到題目。'}</p></div>`
     : `<div class="board-wrap">${renderBoard(puzzle, Boolean(isViewing || state.connectionLost || (state.mode === 'multi' && room.status !== 'playing')), viewedBoard(me, isViewing))}</div>`;
@@ -160,8 +161,16 @@ function renderGame(message = '') {
     patchGame(puzzle, room, me, isViewing, message);
     return;
   }
+  const multi = state.mode === 'multi';
+  // Portrait tabs: the lobby lives in the players pane, the match on the board.
+  if (multi && room.status !== renderedLayout?.split('|')[4]) state.pane = room.status === 'lobby' ? 'players' : 'board';
   renderedLayout = layout;
-  view.innerHTML = `<section class="game-layout"><div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div>${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>${ratingLine(puzzle.rating)}` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div></div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${footer}${nextAction}</div>${state.mode === 'multi' ? `<div class="side-panels">${renderRoomPanel(room, me)}${renderChatPanel()}</div>` : `<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>${state.mode === 'practice' ? '練習模式：點錯不會結束' : '點錯一格，挑戰失敗'}</li></ul></aside>`}</section>`;
+  const gameMain = `<div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div class="game-title">${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>${ratingLine(puzzle.rating)}` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div>${hint}</div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${nextAction}</div>`;
+  const paneTabs = `<nav class="pane-tabs" aria-label="房間分頁">${[['players', '玩家'], ['board', '棋盤'], ['chat', '聊天']].map(([pane, label]) => `<button type="button" class="pane-tab" data-pane-tab="${pane}" aria-pressed="${state.pane === pane}">${label}</button>`).join('')}</nav>`;
+  view.innerHTML = multi
+    ? `<section class="game-layout multi" data-pane="${state.pane}">${paneTabs}${renderRoomPanel(room, me)}${gameMain}${renderChatPanel()}</section>`
+    : `<section class="game-layout">${gameMain}<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>${state.mode === 'practice' ? '練習模式：點錯不會結束' : '點錯一格，挑戰失敗'}</li></ul></aside></section>`;
+  document.querySelectorAll('[data-pane-tab]').forEach(tab => tab.addEventListener('click', () => { state.pane = tab.dataset.paneTab; document.querySelector('.game-layout').dataset.pane = state.pane; document.querySelectorAll('[data-pane-tab]').forEach(t => t.setAttribute('aria-pressed', t === tab)); }));
   document.querySelector('#quit').onclick = state.mode === 'practice' ? showHistory : state.mode === 'single' ? showLevels : leaveRoom;
   document.querySelector('#next-level')?.addEventListener('click', () => state.nextSingleId ? startSingle(state.nextSingleId) : showLevels());
   bindPracticeButtons();
@@ -232,10 +241,11 @@ function renderRoomPanel(room, me) {
     ? `<button class="role-toggle" id="role-toggle">${me?.spectator ? '加入本局，成為玩家' : '改為觀戰者'}</button>` : '';
   const sprintMode = room.sprintMode === 'multiply' ? 'multiply' : 'fixed';
   const sprintValue = sprintMode === 'multiply' ? room.sprintFactor : room.sprintSeconds;
+  // The summary is public to every member, so it must never carry secrets
+  // such as a room password.
+  const sprintSummary = sprintMode === 'multiply' ? `第一名用時 × ${room.sprintFactor}` : `${room.sprintSeconds} 秒`;
   const sprintSetting = room.status === 'lobby'
-    ? isHost
-      ? `<label class="sprint-setting">最後衝刺時間<select id="sprint-mode"><option value="fixed" ${sprintMode === 'fixed' ? 'selected' : ''}>固定秒數</option><option value="multiply" ${sprintMode === 'multiply' ? 'selected' : ''}>第一名用時 ×</option></select><input id="sprint-value" type="text" inputmode="decimal" maxlength="6" value="${sprintValue}" /><small>${sprintMode === 'multiply' ? '倍數 0.1 – 9999' : '1 – 9999 秒'}</small></label>`
-      : `<p class="sprint-setting readonly">最後衝刺：<b>${sprintMode === 'multiply' ? `第一名用時 × ${room.sprintFactor}` : `${room.sprintSeconds} 秒`}</b></p>`
+    ? `<p class="sprint-setting readonly" data-sprint-mode="${sprintMode}" data-sprint-value="${sprintValue}"><span>最後衝刺：<b>${sprintSummary}</b></span>${isHost ? '<button type="button" class="icon-button" id="sprint-settings-button" aria-label="房間設定" aria-haspopup="dialog">⚙</button>' : ''}</p>`
     : '';
   const leaderboard = room.leaderboard?.length
     ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3><ol>${room.leaderboard.map(row => `<li><strong>${escapeHtml(row.name)}</strong><span>${(row.ms / 1000).toFixed(1)}s · ${row.wins} 勝 · 第 ${row.round} 局</span></li>`).join('')}</ol></div>`
@@ -393,7 +403,7 @@ async function showMultiplayer() {
   const roomList = publicRooms.length
     ? publicRooms.map(room => `<button class="public-room" data-public-room="${room.code}"><span class="public-room-icon">${room.status === 'lobby' ? '♟' : '◉'}</span><span><strong>${escapeHtml(room.name)}</strong><small>${room.size} × ${room.size} · ${room.players} 位玩家${room.spectators ? ` · ${room.spectators} 位觀戰` : ''}</small></span><b>${room.status === 'lobby' ? '快速加入 →' : '觀戰 →'}</b></button>`).join('')
     : '<p class="empty public-empty">目前沒有公開房間。開一間讓大家加入吧！</p>';
-  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label><label>最後衝刺秒數<input name="sprintSeconds" type="text" inputmode="numeric" maxlength="4" value="60" /></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section>`;
+  view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><div class="page-body"><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label><label>最後衝刺秒數<input name="sprintSeconds" type="text" inputmode="numeric" maxlength="4" value="60" /></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section></div></div>`;
   document.querySelector('#back').onclick = home;
   document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target), button = event.target.querySelector('button[type="submit"], button'), label = button.textContent; button.disabled = true; button.textContent = '建立中…'; socket.emit('create-room', { name: playerName(), playerId: state.visitorId, roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); };
   document.querySelector('#join-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target); socket.emit('join-room', { code: form.get('code'), name: playerName(), playerId: state.visitorId, spectator: form.has('spectator') }, result => { if (result.error) alert(result.error); }); };
@@ -407,7 +417,47 @@ function bindRoomButtons() {
   document.querySelectorAll('[data-watch]').forEach(button => button.addEventListener('click', () => { state.watchingPlayerId = button.dataset.watch; renderGame(); }));
   document.querySelector('#restart-room')?.addEventListener('click', event => { const button = event.currentTarget, label = button.textContent; button.disabled = true; button.textContent = '準備中…'; socket.emit('restart-room', { code: state.room.code, playerId: state.visitorId }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); });
   document.querySelector('#role-toggle')?.addEventListener('click', () => socket.emit('set-lobby-role', { code: state.room.code, playerId: state.visitorId, spectator: !state.room.players.find(player => player.id === state.visitorId)?.spectator }, result => result?.error && alert(result.error)));
-  document.querySelector('#sprint-mode')?.addEventListener('change', event => { const mode = event.target.value; socket.emit('set-sprint-setting', { code: state.room.code, playerId: state.visitorId, mode, value: mode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds }, result => result?.error && alert(result.error)); });
+  document.querySelector('#sprint-settings-button')?.addEventListener('click', event => openDialog(document.querySelector('#sprint-dialog'), event.currentTarget));
+  syncSprintDialog();
+}
+// The sprint controls live in a static dialog; the room panel only carries the
+// current values as data attributes and the dialog mirrors them on every patch.
+function syncSprintDialog() {
+  const summary = document.querySelector('.sprint-setting'), group = document.querySelector('#sprint-group'), mode = document.querySelector('#sprint-mode'), value = document.querySelector('#sprint-value');
+  if (!group || !summary) return;
+  group.dataset.mode = summary.dataset.sprintMode;
+  mode.value = summary.dataset.sprintMode;
+  if (document.activeElement !== value) value.value = summary.dataset.sprintValue;
+}
+function openDialog(dialog, opener) {
+  if (!dialog || dialog.open) return;
+  dialog.showModal();
+  dialog.querySelector('select, input, textarea, button:not(.close)')?.focus();
+  dialog.addEventListener('close', () => opener?.focus(), { once: true });
+}
+function bindTooltips() {
+  const hide = () => document.querySelectorAll('.tooltip.show').forEach(tip => { tip.classList.remove('show'); tip.previousElementSibling?.setAttribute('aria-expanded', 'false'); });
+  const show = dot => {
+    hide();
+    const tip = document.getElementById(dot.getAttribute('aria-describedby')); if (!tip) return;
+    tip.classList.add('show'); dot.setAttribute('aria-expanded', 'true');
+    const rect = dot.getBoundingClientRect(), pad = 12, width = tip.offsetWidth, height = tip.offsetHeight;
+    const left = Math.min(Math.max(pad, rect.left + rect.width / 2 - width / 2), window.innerWidth - width - pad);
+    const below = rect.bottom + 8 + height <= window.innerHeight - pad;
+    tip.style.left = `${left}px`; tip.style.top = `${below ? rect.bottom + 8 : rect.top - height - 8}px`;
+    tip.style.setProperty('--arrow-x', `${rect.left + rect.width / 2 - left - 5}px`); tip.classList.toggle('above', !below);
+  };
+  document.addEventListener('pointerover', event => { const dot = event.target.closest?.('.hint-dot'); if (dot && event.pointerType !== 'touch') show(dot); });
+  document.addEventListener('pointerout', event => { const dot = event.target.closest?.('.hint-dot'); if (dot && event.pointerType !== 'touch' && document.activeElement !== dot) hide(); });
+  document.addEventListener('focusin', event => { const dot = event.target.closest?.('.hint-dot'); if (dot) show(dot); });
+  document.addEventListener('focusout', event => { if (event.target.closest?.('.hint-dot')) hide(); });
+  // Touch has no hover, so a tap toggles and tapping elsewhere dismisses.
+  document.addEventListener('click', event => { const dot = event.target.closest?.('.hint-dot'); if (!dot) return hide(); dot.getAttribute('aria-expanded') === 'true' && event.pointerType !== 'mouse' ? hide() : show(dot); });
+  document.addEventListener('keydown', event => event.key === 'Escape' && hide());
+  window.addEventListener('scroll', hide, true);
+}
+function bindSprintDialog() {
+  document.querySelector('#sprint-mode')?.addEventListener('change', event => { const mode = event.target.value; document.querySelector('#sprint-group').dataset.mode = mode; socket.emit('set-sprint-setting', { code: state.room.code, playerId: state.visitorId, mode, value: mode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds }, result => result?.error && alert(result.error)); });
   document.querySelector('#sprint-value')?.addEventListener('input', event => { const mode = document.querySelector('#sprint-mode')?.value; event.target.value = mode === 'multiply' ? event.target.value.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1') : event.target.value.replace(/\D/g, ''); });
   document.querySelector('#sprint-value')?.addEventListener('change', event => { const mode = document.querySelector('#sprint-mode')?.value || 'fixed'; socket.emit('set-sprint-setting', { code: state.room.code, playerId: state.visitorId, mode, value: event.target.value }, result => { result?.error && alert(result.error); const stored = state.room.sprintMode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds; event.target.value = stored; }); });
 }
