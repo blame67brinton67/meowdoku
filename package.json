@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check public/app.js && node --check public/sfx.js && node --check sprint.js && node --check test/sprint.test.js && node --check difficulty.js && node --check ladder.js && node --check generator.js && node --check puzzle-worker.js && node --check puzzle.js && node --check db.js && node --check auth.js && node --check achievements.js && node --check test/auth.test.js && node --check test/achievements.test.js",
+    "check": "node --check server.js && node --check public/app.js && node --check public/sfx.js && node --check sprint.js && node --check test/sprint.test.js && node --check difficulty.js && node --check ladder.js && node --check generator.js && node --check puzzle-worker.js && node --check puzzle.js && node --check db.js && node --check auth.js && node --check achievements.js && node --check test/auth.test.js && node --check test/admin.test.js && node --check test/board-text.test.js && node --check test/achievements.test.js",
     "test": "node --test test/"
   },
   "dependencies": {

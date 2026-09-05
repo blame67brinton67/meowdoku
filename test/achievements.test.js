@@ -6,7 +6,7 @@ const path = require('node:path');
 const { openDb } = require('../db');
 const { generatePuzzle } = require('../puzzle');
 const { createAuth, sanitizeDisplayName, DISPLAY_NAME_MAX } = require('../auth');
-const { createAchievements, evaluate, ACHIEVEMENTS, AVATARS, FRAMES, DEFAULT_FRAME } = require('../achievements');
+const { createAchievements, evaluate, ACHIEVEMENTS, AVATARS, FRAMES, DEFAULT_FRAME, DEFAULT_AVATAR } = require('../achievements');
 const { ladderChapters, LADDER_LENGTH } = require('../ladder');
 
 process.env.MEOWDOKU_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'meowdoku-achievements-'));
@@ -202,7 +202,8 @@ test('HTTP: locked frames are rejected server-side; a clear unlocks one and it b
   assert.deepEqual(profile.data.stats, { matches: 0, wins: 0 });
   // Leaderboard rows carry the avatar and frame for rendering.
   const board = await call('GET', '/api/leaderboard');
-  assert.deepEqual(board.data.find(r => r.name === 'framer'), { name: 'framer', cleared: 1, avatar: null, frame: 'wood' });
+  const mine = board.data.top.find(r => r.name === 'framer');
+  assert.deepEqual({ avatar: mine.avatar, frame: mine.frame, cleared: mine.cleared }, { avatar: DEFAULT_AVATAR, frame: 'wood', cleared: 1 });
 });
 
 test('HTTP: display names are sanitized and avatars must be built in', async () => {

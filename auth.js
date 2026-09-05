@@ -203,7 +203,7 @@ function createAuth(db, { now = Date.now } = {}) {
     setDisplayName: db.prepare('UPDATE users SET display_name = ? WHERE id = ?'),
     setAvatar: db.prepare('UPDATE users SET avatar = ? WHERE id = ?'),
     setFrame: db.prepare('UPDATE users SET frame = ? WHERE id = ?'),
-    leaderboard: db.prepare('SELECT u.username, u.display_name, u.avatar, u.frame, COUNT(p.level_id) AS cleared FROM users u JOIN progress p ON p.user_id = u.id GROUP BY u.id')
+    leaderboard: db.prepare('SELECT u.id, u.username, u.display_name, u.avatar, u.frame, COUNT(p.level_id) AS cleared FROM users u JOIN progress p ON p.user_id = u.id GROUP BY u.id')
   };
 
   function issueSession({ userId = null, guestId = null, userAgent }) {
@@ -303,7 +303,7 @@ function createAuth(db, { now = Date.now } = {}) {
     setDisplayName: (userId, name) => q.setDisplayName.run(name, userId),
     setAvatar: (userId, avatar) => q.setAvatar.run(avatar, userId),
     setFrame: (userId, frame) => q.setFrame.run(frame, userId),
-    userLeaderboard: () => q.leaderboard.all().map(row => ({ name: row.display_name || row.username, cleared: row.cleared, avatar: row.avatar, frame: row.frame })),
+    userLeaderboard: () => q.leaderboard.all().map(row => ({ id: row.id, name: row.display_name || row.username, cleared: row.cleared, avatar: row.avatar, frame: row.frame })),
     userById: id => { const row = q.userById.get(id); return row ? publicUser(row) : null; },
     deleteGuestSessions: guestId => q.deleteGuestSessions.run(guestId)
   };
