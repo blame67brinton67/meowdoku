@@ -80,6 +80,11 @@ test('store: single clears are judged after the write, chapter clears need every
   assert.equal(achievements.gather(userId, { chapters: partial }, single()).chaptersCleared.has('kitten'), false);
   // Replaying an already cleared level unlocks nothing twice.
   assert.deepEqual(achievements.record(userId, { chapters }, single({ levelId: kitten.levelIds[0] }), () => auth.clearLevel(userId, kitten.levelIds[0])), []);
+  // Replaying a cleared level still counts as activity for the comeback timer.
+  time.tick(7 * DAY - 1);
+  achievements.record(userId, { chapters }, single({ levelId: kitten.levelIds[0] }), () => auth.clearLevel(userId, kitten.levelIds[0]));
+  time.tick(2 * DAY);
+  assert.ok(!ids(achievements.record(userId, { chapters }, single({ levelId: 'late-0' }), () => auth.clearLevel(userId, 'late-0'))).includes('comeback'));
   // Comeback: exactly 7 days of silence counts, a millisecond less does not.
   time.tick(7 * DAY - 1);
   assert.ok(!ids(achievements.record(userId, { chapters }, single({ levelId: 'late-1' }), () => auth.clearLevel(userId, 'late-1'))).includes('comeback'));
@@ -117,6 +122,16 @@ test('frames: only plain plus the rewards of unlocked achievements are selectabl
   achievements.record(userId, { chapters: [] }, single({ levelId: 'l1' }), () => auth.clearLevel(userId, 'l1'));
   assert.equal(achievements.frameUnlocked(userId, 'wood'), true);
   assert.equal(achievements.frameUnlocked(userId, 'gold'), false);
+});
+
+test('flawless counts only clears whose mistake count is known to be zero', async () => {
+  const { auth, achievements, userId } = await setup();
+  auth.claimVisitor(userId, 'v1', { cleared: ['old-1', 'old-2'] });
+  auth.clearLevel(userId, 'no-count');
+  auth.clearLevel(userId, 'clean', { mistakes: 0 });
+  auth.clearLevel(userId, 'messy', { mistakes: 2 });
+  const stats = achievements.gather(userId, { chapters: [] }, single());
+  assert.equal(stats.cleared, 5); assert.equal(stats.flawless, 1);
 });
 
 test('display names: control and zero-width characters go, whitespace is trimmed, 20 code points max', () => {
@@ -184,6 +199,7 @@ test('HTTP: locked frames are rejected server-side; a clear unlocks one and it b
   assert.ok(profile.data.frames.find(f => f.id === 'wood').unlocked);
   assert.equal(profile.data.avatars.length, AVATARS.length);
   assert.ok(Array.isArray(profile.data.chapters));
+  assert.deepEqual(profile.data.stats, { matches: 0, wins: 0 });
   // Leaderboard rows carry the avatar and frame for rendering.
   const board = await call('GET', '/api/leaderboard');
   assert.deepEqual(board.data.find(r => r.name === 'framer'), { name: 'framer', cleared: 1, avatar: null, frame: 'wood' });
@@ -195,6 +211,12 @@ test('HTTP: display names are sanitized and avatars must be built in', async () 
   assert.equal(saved.status, 200);
   assert.equal(saved.data.user.displayName, '貓咪' + 'x'.repeat(18));
   assert.equal((await call('POST', '/api/profile', { body: { displayName: '\u0001 \u200b' }, cookie })).status, 400);
+  assert.equal((await call('POST', '/api/profile', { body: { displayName: 'a'.repeat(201) }, cookie })).status, 400);
+  assert.equal((await call('POST', '/api/profile', { body: { displayName: ['x'] }, cookie })).status, 400);
+  // One bad field leaves the whole request unapplied.
+  assert.equal((await call('POST', '/api/profile', { body: { displayName: 'Partial', avatar: '💩' }, cookie })).status, 400);
+  assert.equal((await call('POST', '/api/profile', { body: { displayName: 'Partial', frame: 'gold' }, cookie })).status, 403);
+  assert.equal((await call('GET', '/api/auth/me', { cookie })).data.user.displayName, '貓咪' + 'x'.repeat(18));
   assert.equal((await call('POST', '/api/profile', { body: { avatar: '💩' }, cookie })).status, 400);
   const avatar = await call('POST', '/api/profile', { body: { avatar: AVATARS[3] }, cookie });
   assert.equal(avatar.status, 200); assert.equal(avatar.data.user.avatar, AVATARS[3]);

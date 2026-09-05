@@ -59,7 +59,8 @@ const MIGRATIONS = [
   );
   `,
   `
-  ALTER TABLE progress ADD COLUMN mistakes INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE progress ADD COLUMN mistakes INTEGER;
+  ALTER TABLE users ADD COLUMN last_active_at INTEGER;
   CREATE TABLE achievements (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,

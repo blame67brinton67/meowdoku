@@ -72,7 +72,9 @@ function createAchievements(db, { now = Date.now } = {}) {
     unlock: db.prepare('INSERT OR IGNORE INTO achievement_unlocks (user_id, achievement_id, unlocked_at) VALUES (?, ?, ?)'),
     progress: db.prepare('SELECT level_id, cleared_at, hints_used, mistakes FROM progress WHERE user_id = ?'),
     history: db.prepare('SELECT finished_at, record_json FROM match_history WHERE user_id = ? ORDER BY finished_at DESC'),
-    lastActivity: db.prepare('SELECT MAX(at) AS at FROM (SELECT MAX(cleared_at) AS at FROM progress WHERE user_id = ? UNION ALL SELECT MAX(finished_at) FROM match_history WHERE user_id = ?)')
+    lastActivity: db.prepare('SELECT MAX(at) AS at FROM (SELECT MAX(cleared_at) AS at FROM progress WHERE user_id = ? UNION ALL SELECT MAX(finished_at) FROM match_history WHERE user_id = ? UNION ALL SELECT last_active_at FROM users WHERE id = ?)'),
+    touch: db.prepare('UPDATE users SET last_active_at = ? WHERE id = ?'),
+    matchStats: db.prepare("SELECT COUNT(*) AS matches, COALESCE(SUM(json_extract(record_json, '$.outcome.rank') = 1), 0) AS wins FROM match_history WHERE user_id = ?")
   };
   db.transaction(() => ACHIEVEMENTS.forEach((a, i) => q.upsert.run(a.id, a.name, a.description, a.frame, i)))();
 
@@ -93,6 +95,7 @@ function createAchievements(db, { now = Date.now } = {}) {
     }
     return {
       cleared: cleared.size, chaptersCleared,
+      // NULL means the mistake count is unknown (legacy or imported clears).
       flawless: rows.filter(row => row.mistakes === 0).length,
       noHint: rows.filter(row => (row.hints_used || 0) === 0).length,
       matches, wins, streak, eliminations, event
@@ -103,8 +106,11 @@ function createAchievements(db, { now = Date.now } = {}) {
   // state so the event itself counts. Returns the achievements just unlocked.
   const record = db.transaction((userId, context, event, apply) => {
     const at = now();
-    const last = q.lastActivity.get(userId, userId).at;
+    const last = q.lastActivity.get(userId, userId, userId).at;
     apply?.();
+    // Replays of cleared levels leave progress untouched, so activity is kept
+    // on the user row as well.
+    q.touch.run(at, userId);
     const stats = gather(userId, context, { ...event, hour: new Date(at).getHours(), sinceLast: last == null ? null : at - last });
     const fresh = evaluate(stats, new Set(unlockedMap(userId).keys()));
     for (const achievement of fresh) q.unlock.run(userId, achievement.id, at);
@@ -125,7 +131,7 @@ function createAchievements(db, { now = Date.now } = {}) {
     };
   }
 
-  return { record, gather, listFor, unlockedFrames, frameUnlocked: (userId, frameId) => unlockedFrames(userId).has(frameId) };
+  return { record, gather, listFor, unlockedFrames, frameUnlocked: (userId, frameId) => unlockedFrames(userId).has(frameId), matchStats: userId => q.matchStats.get(userId) };
 }
 
 module.exports = { ACHIEVEMENTS, AVATARS, FRAMES, DEFAULT_AVATAR, DEFAULT_FRAME, CHAPTERS, evaluate, createAchievements };

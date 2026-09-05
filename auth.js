@@ -289,14 +289,14 @@ function createAuth(db, { now = Date.now } = {}) {
   const claimVisitor = db.transaction((userId, visitorId, { cleared = [], history = [] }) => {
     if (q.claimed.get(visitorId)) return false;
     q.insertClaim.run(visitorId, userId, now());
-    for (const levelId of cleared) q.upsertProgress.run(userId, String(levelId), now(), null, 0, 0);
+    for (const levelId of cleared) q.upsertProgress.run(userId, String(levelId), now(), null, 0, null);
     for (const record of history) q.upsertHistory.run(userId, String(record.matchId), Number(record.finishedAt) || now(), JSON.stringify(record));
     return true;
   });
 
   return {
     register, login, logout, resolve, createGuest, purgeExpired, bootstrapAdmin, loginCooldown, claimVisitor,
-    clearLevel: (userId, levelId, { ms = null, hints = 0, mistakes = 0 } = {}) => q.upsertProgress.run(userId, levelId, now(), ms, hints, mistakes),
+    clearLevel: (userId, levelId, { ms = null, hints = 0, mistakes = null } = {}) => q.upsertProgress.run(userId, levelId, now(), ms, hints, mistakes),
     clearedLevels: userId => q.cleared.all(userId).map(row => row.level_id),
     recordMatch: (userId, record) => q.upsertHistory.run(userId, record.matchId, record.finishedAt, JSON.stringify(record)),
     matchHistory: (userId, limit = 50) => q.history.all(userId, limit).map(row => JSON.parse(row.record_json)),

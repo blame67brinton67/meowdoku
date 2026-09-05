@@ -247,28 +247,32 @@ app.get('/api/progress/me', ensureIdentity, (req, res) => res.json({ cleared: cl
 // Guests see the catalogue with nothing unlocked; nothing here needs a session.
 app.get('/api/achievements/me', (req, res) => res.json(achievements.listFor(isUser(req) ? req.identity.id : null)));
 app.get('/api/profile/me', requireUser, (req, res) => {
-  const history = auth.matchHistory(req.identity.id, HISTORY_PER_VISITOR);
   res.json({
     ...publicIdentity(req.identity), avatars: AVATARS, chapters: ladderChapters(ladder), cleared: auth.clearedLevels(req.identity.id),
-    ...achievements.listFor(req.identity.id),
-    stats: { matches: history.length, wins: history.filter(record => record.outcome?.rank === 1).length }
+    ...achievements.listFor(req.identity.id), stats: achievements.matchStats(req.identity.id)
   });
 });
+// Raw input is bounded before sanitizing so a 1 MB name is refused, not scanned.
+const PROFILE_FIELD_MAX = 200;
+const applyProfile = db.transaction((userId, writes) => { for (const write of writes) write(); });
 app.post('/api/profile', requireUser, (req, res) => {
   const { displayName, avatar, frame } = req.body || {};
+  const writes = [];
   if (displayName !== undefined) {
+    if (typeof displayName !== 'string' || displayName.length > PROFILE_FIELD_MAX) return res.status(400).json({ error: `顯示名稱太長（最多 ${DISPLAY_NAME_MAX} 字）` });
     const clean = sanitizeDisplayName(displayName);
     if (!clean) return res.status(400).json({ error: `顯示名稱不能是空的（最多 ${DISPLAY_NAME_MAX} 字）` });
-    auth.setDisplayName(req.identity.id, clean);
+    writes.push(() => auth.setDisplayName(req.identity.id, clean));
   }
   if (avatar !== undefined) {
-    if (!AVATARS.includes(avatar)) return res.status(400).json({ error: '這不是內建的頭像' });
-    auth.setAvatar(req.identity.id, avatar);
+    if (typeof avatar !== 'string' || !AVATARS.includes(avatar)) return res.status(400).json({ error: '這不是內建的頭像' });
+    writes.push(() => auth.setAvatar(req.identity.id, avatar));
   }
   if (frame !== undefined) {
-    if (typeof frame !== 'string' || !achievements.frameUnlocked(req.identity.id, frame)) return res.status(403).json({ error: '這個相框尚未解鎖' });
-    auth.setFrame(req.identity.id, frame);
+    if (typeof frame !== 'string' || frame.length > PROFILE_FIELD_MAX || !achievements.frameUnlocked(req.identity.id, frame)) return res.status(403).json({ error: '這個相框尚未解鎖' });
+    writes.push(() => auth.setFrame(req.identity.id, frame));
   }
+  applyProfile(req.identity.id, writes);
   res.json({ user: auth.userById(req.identity.id) });
 });
 app.get('/api/history/me', ensureIdentity, (req, res) => res.json(historyFor(req.identity)));
