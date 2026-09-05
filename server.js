@@ -316,7 +316,6 @@ io.on('connection', socket => {
     if (!room) return callback({ error: '房間不存在或已關閉' });
     // A match's player roster locks as soon as its countdown begins.
     joinRoom(socket, room, { name, playerId, spectator: Boolean(spectator) || room.status !== 'lobby' });
-    if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
     callback({ ok: true, spectator: room.status !== 'lobby' || Boolean(spectator) });
   });
   socket.on('start-game', ({ code, playerId }, callback) => {
@@ -460,6 +459,7 @@ function joinRoom(socket, room, { name, playerId, spectator }) {
   for (const existing of room.players.values()) if (existing.id === playerId) { clearTimeout(existing.idleTimer); room.players.delete(existing.id); }
   const player = { id: playerId, name: String(name || '神秘貓奴').slice(0, 20), spectator, socketId: socket.id, idle: false, disconnectedAt: null, idleTimer: null, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
   room.players.set(playerId, player); socket.join(room.code); socket.emit('chat-backlog', room.chat); emitRoom(room); checkAllSpectator(room);
+  if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
 }
 
 server.listen(PORT, () => { console.log(`MeowDoku is ready at http://localhost:${PORT}`); startLadder(); });
