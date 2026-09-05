@@ -215,9 +215,19 @@ function generatePuzzle(size = 7) {
   throw new Error('無法產生唯一解關卡');
 }
 
+// The answer row is lightly obscured so nobody spoils a puzzle by glancing at
+// shared text. It is not protection: anyone can decode it.
+const ANSWER_PREFIX = 'answer:', ANSWER_NOTE = '# 下一行是 base64 編碼的答案，避免不小心瞄到；匯入時原樣貼上即可。';
+function encodeAnswerLine(line) { return ANSWER_PREFIX + Buffer.from(line, 'utf8').toString('base64'); }
+function decodeAnswerLine(line) {
+  if (!line.startsWith(ANSWER_PREFIX)) return line;
+  const encoded = line.slice(ANSWER_PREFIX.length).trim();
+  if (!/^[A-Za-z0-9+/]+=*$/.test(encoded)) throw new Error('答案行的編碼格式不正確。');
+  return Buffer.from(encoded, 'base64').toString('utf8').trim();
+}
 function parseBoardText(text) {
   if (typeof text !== 'string') throw new Error('地圖文字必須是文字格式。');
-  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
   if (lines.length < MIN_SIZE + 1 || lines.length > MAX_SIZE + 1) {
     throw new Error(`地圖需要 ${MIN_SIZE + 1} 至 ${MAX_SIZE + 1} 行非空文字。`);
   }
@@ -230,7 +240,7 @@ function parseBoardText(text) {
     return parts.map(Number);
   }
   const grid = lines.slice(0, size).map((line, index) => values(line, index + 1));
-  const answer = values(lines[size], size + 1);
+  const answer = values(decodeAnswerLine(lines[size]), size + 1);
   for (const row of grid) for (const region of row) {
     if (region < 1 || region > size) throw new Error(`區域編號必須介於 1 和 ${size} 之間。`);
   }
@@ -267,11 +277,12 @@ function parseBoardText(text) {
   return { size, regions, solution };
 }
 // Keep in sync with formatPuzzleText in public/app.js.
-function formatBoardText(puzzle) {
+function formatBoardText(puzzle, { encodeAnswer = false } = {}) {
   const rows = [];
   for (let row = 0; row < puzzle.size; row++) rows.push(puzzle.regions.slice(row * puzzle.size, (row + 1) * puzzle.size).map(region => region + 1).join(' '));
-  rows.push(puzzle.solution.map(cat => cat.col + 1).join(' '));
+  const answer = puzzle.solution.map(cat => cat.col + 1).join(' ');
+  if (encodeAnswer) rows.push(ANSWER_NOTE, encodeAnswerLine(answer)); else rows.push(answer);
   return rows.join('\n');
 }
 
-module.exports = { generatePuzzle, countSolutions, findSolutions, clampSize, MIN_SIZE, MAX_SIZE, parseBoardText, formatBoardText };
+module.exports = { generatePuzzle, countSolutions, findSolutions, clampSize, MIN_SIZE, MAX_SIZE, parseBoardText, formatBoardText, encodeAnswerLine, decodeAnswerLine, ANSWER_PREFIX, ANSWER_NOTE };

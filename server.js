@@ -248,7 +248,8 @@ function compactRoom(room) {
     code: room.code, name: room.name, status: room.status, hostId: room.hostId, visibility: room.visibility, restartPending: Boolean(room.restartPending), hasPassword: Boolean(room.password),
     // Do not reveal the region arrangement to waiting players or spectators.
     puzzle: room.status === 'playing' || room.status === 'finished'
-      ? { ...publicLevel(room.puzzle), ...(room.status === 'finished' ? { solution: room.puzzle.solution } : {}) }
+      // The answer rides along once play starts so eliminated players can export the map; cheating is not a concern here.
+      ? { ...publicLevel(room.puzzle), solution: room.puzzle.solution }
       : { id: room.puzzle.id, name: room.puzzle.name, size: room.puzzle.size },
     countdownEnds: room.countdownEnds, deadline: room.deadline, sprintMode: room.sprintMode, sprintSeconds: room.sprintSeconds, sprintFactor: room.sprintFactor,
     leaderboard: leaderboardRows(room), stats: statsRows(room), kicked: [...room.kicked.values()],

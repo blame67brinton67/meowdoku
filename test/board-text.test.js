@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { generatePuzzle, formatBoardText, parseBoardText, countSolutions } = require('../puzzle');
+const { generatePuzzle, formatBoardText, parseBoardText, countSolutions, ANSWER_PREFIX, ANSWER_NOTE } = require('../puzzle');
 
 const fixture = {
   size: 5,
@@ -68,4 +68,19 @@ test('rejects a deterministic multi-solution board made by merging regions', () 
   assert.equal(countSolutions(merged, 5, 2), 2);
   const mergedText = formatBoardText({ size: 5, regions: merged, solution: [{ row: 0, col: 1 }, { row: 1, col: 3 }, { row: 2, col: 0 }, { row: 3, col: 4 }, { row: 4, col: 2 }] });
   assert.throws(() => parseBoardText(mergedText), /不唯一/);
+});
+
+test('encoded answer rows round-trip and plain rows still parse', () => {
+  const encoded = formatBoardText(puzzle, { encodeAnswer: true });
+  const lines = encoded.split('\n');
+  assert.equal(lines[5], ANSWER_NOTE);
+  assert.equal(lines[6], `${ANSWER_PREFIX}${Buffer.from('1 4 2 5 3').toString('base64')}`);
+  assert.doesNotMatch(encoded, /\n1 4 2 5 3$/);
+  assert.deepEqual(parseBoardText(encoded), puzzle);
+  assert.deepEqual(parseBoardText(text()), puzzle);
+  assert.deepEqual(parseBoardText(`# 任意註解\n${text()}\n# 結尾註解`), puzzle);
+  assert.deepEqual(parseBoardText(encoded.replace('answer:', 'answer: ')), puzzle);
+  assert.throws(() => parseBoardText(text().replace(/1 4 2 5 3$/, 'answer:@@@')), /編碼格式/);
+  assert.throws(() => parseBoardText(text().replace(/1 4 2 5 3$/, `answer:${Buffer.from('1 1 1 1 1').toString('base64')}`)), /不重複排列/);
+  assert.throws(() => parseBoardText(text().replace(/1 4 2 5 3$/, `answer:${Buffer.from('貓').toString('base64')}`)), /必須有 5 個數值/);
 });

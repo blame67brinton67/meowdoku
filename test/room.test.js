@@ -280,20 +280,17 @@ test('room password gates joining and never leaves the server', async () => {
   void aId;
 });
 
-test('eliminated player gets a solution-free payload until the round ends', async () => {
+test('eliminated player receives the answer in the room payload while others still play', async () => {
   const { code, sockets: [host, guest], ids: [hostId, guestId] } = await makeRoom(['host', 'guest']);
   await startMatch(code, host, hostId);
   const state = once(guest, 'room-state');
   await eliminate(code, guest, guestId);
   const payload = await state;
-  assert.equal(payload.players.find(p => p.id === guestId).alive, false);
   assert.equal(payload.status, 'playing');
+  assert.equal(payload.players.find(p => p.id === guestId).alive, false);
   assert.ok(Array.isArray(payload.puzzle.regions));
-  assert.doesNotMatch(JSON.stringify(payload), /solution/);
-  const done = finished(guest);
-  await solve(code, host, hostId);
-  await done;
-  assert.deepEqual(JSON.parse(JSON.stringify(compactRoom(room(code)))).puzzle.solution, room(code).puzzle.solution);
+  assert.deepEqual(payload.puzzle.solution, room(code).puzzle.solution);
+  assert.doesNotMatch(JSON.stringify(compactRoom({ ...room(code), status: 'lobby' })), /solution|regions/);
 });
 
 test('roles can change once everyone is done, never mid-round, without touching points', async () => {
