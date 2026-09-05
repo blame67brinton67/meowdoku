@@ -6,7 +6,7 @@
   padding: 6px;
   border-radius: 16px;
   background: var(--board-line);
-  box-shadow: inset 0 0 0 1px rgba(var(--surface-rgb), .06), 0 14px 30px rgba(38, 42, 51, .28);
+  box-shadow: inset 0 0 0 1px rgba(var(--on-board-rgb), .06), 0 14px 30px rgba(38, 42, 51, .28);
   touch-action: none;
 }
 
@@ -19,7 +19,7 @@
   border-radius: 8px;
   /* Half a cell, measured against the board itself so 12 × 12 stays legible in any layout. */
   font: 700 clamp(11px, calc(52cqw / var(--n)), 42px) / 1 "Noto Sans TC", sans-serif;
-  box-shadow: inset 0 1px rgba(var(--surface-rgb), .28), inset 0 -2px rgba(0, 0, 0, .16);
+  box-shadow: inset 0 1px rgba(var(--on-board-rgb), .28), inset 0 -2px rgba(0, 0, 0, .16);
 }
 
 /* Saturated blocks on a dark grid: the colour itself marks the region, the gap marks its edge. */
@@ -31,11 +31,11 @@
 /* Light on a saturated board, so a mistake stands out whatever the region colour is. */
 .cell.wrong { color: var(--danger); font-size: clamp(14px, calc(64cqw / var(--n)), 52px); box-shadow: inset 0 0 0 3px var(--danger); text-shadow: none; }
 /* A tap in a room is answered by the server, so the cell acknowledges it right away. */
-.cell.pending { box-shadow: inset 0 0 0 3px rgba(var(--surface-rgb), .8); animation: cell-pending .9s ease-in-out infinite; }
+.cell.pending { box-shadow: inset 0 0 0 3px rgba(var(--on-board-rgb), .8); animation: cell-pending .9s ease-in-out infinite; }
 @keyframes cell-pending { 50% { opacity: .62; } }
 .cat-icon { display: inline-grid; place-items: center; filter: drop-shadow(0 3px 3px rgba(32, 34, 42, .32)); }
 .cat-reveal .cat-icon { animation: cat-reveal .64s cubic-bezier(.18,.89,.32,1.42); }
-.cat-reveal::after { content: "✦  ✦  ✦"; position: absolute; color: rgba(var(--surface-rgb),.9); font-size: clamp(10px, calc(24cqw / var(--n)), 20px); animation: sparkle .62s ease-out forwards; pointer-events: none; }
+.cat-reveal::after { content: "✦  ✦  ✦"; position: absolute; color: rgba(var(--on-board-rgb),.9); font-size: clamp(10px, calc(24cqw / var(--n)), 20px); animation: sparkle .62s ease-out forwards; pointer-events: none; }
 @keyframes cat-reveal { 0% { transform: scale(.15) rotate(-16deg); } 65% { transform: scale(1.22) rotate(7deg); } 100% { transform: scale(1) rotate(0); } }
 @keyframes sparkle { from { opacity: 0; transform: scale(.3) rotate(-15deg); } 30% { opacity: 1; } to { opacity: 0; transform: scale(1.55) rotate(10deg); } }
 
@@ -84,7 +84,7 @@
 @keyframes pop-in { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
 
 .catalog-card.cleared { background: linear-gradient(165deg, var(--success-from), var(--success-to)); border-color: var(--success-text); }
-.catalog-card.locked-level { opacity: .62; background: var(--surface-disabled); }
+.catalog-card.locked-level { opacity: var(--disabled-fade); background: var(--surface-disabled); }
 .catalog-card.locked-level:hover { transform: none; box-shadow: none; border-color: var(--border-soft); }
 .catalog-card button:disabled { cursor: not-allowed; background: var(--button-disabled); box-shadow: none; }
 .person { width: 100%; border: 0; background: transparent; text-align: left; font: inherit; }

@@ -17,6 +17,8 @@ nameInput.addEventListener('input', () => { state.name = nameInput.value.trim();
 const DEFAULT_PALETTE = ['#c4423d', '#2b6cb0', '#c07c12', '#2c7a4b', '#6b4b9e', '#8aa625', '#b83f7d',
                          '#159490', '#8a4a1f', '#4b5768', '#7a2f4e', '#1f6f8b'];
 const DEFAULT_THEME = { palette: DEFAULT_PALETTE, boardLine: '#c7cad1', paper: '#fffaf1' };
+// Keep in sync with the [data-theme="dark"] --paper / --board-line tokens.
+const DARK_THEME = { boardLine: '#3d404b', paper: '#1b1c23' };
 const VALID_COLOR = /^#[0-9a-f]{6}$/i;
 const validColor = value => typeof value === 'string' && VALID_COLOR.test(value) ? value : null;
 function readTheme() {
@@ -31,17 +33,49 @@ function readTheme() {
 const theme = readTheme();
 let palette = theme.palette.slice();
 function saveTheme() { localStorage.meowdokuTheme = JSON.stringify(theme); }
+const darkQuery = matchMedia('(prefers-color-scheme: dark)');
+const readColorScheme = () => { const scheme = localStorage.meowdokuColorScheme; return scheme === 'dark' || scheme === 'light' ? scheme : 'system'; };
+const isDark = () => document.documentElement.dataset.theme === 'dark';
+function applyColorScheme() {
+  const scheme = readColorScheme();
+  document.documentElement.dataset.theme = scheme === 'system' ? (darkQuery.matches ? 'dark' : 'light') : scheme;
+  applyTheme();
+}
+// A paper / grid colour still equal to either scheme's default is treated as
+// "not customised" and follows the scheme; anything else is the player's.
+const isDefaultColor = (key, value) => value === DEFAULT_THEME[key] || value === DARK_THEME[key];
+const effectiveColor = key => isDefaultColor(key, theme[key]) ? (isDark() ? DARK_THEME : DEFAULT_THEME)[key] : theme[key];
 function applyTheme() {
   const root = document.documentElement;
-  root.style.setProperty('--board-line', theme.boardLine);
-  root.style.setProperty('--paper', theme.paper);
+  root.style.setProperty('--board-line', effectiveColor('boardLine'));
+  root.style.setProperty('--paper', effectiveColor('paper'));
   palette = theme.palette.slice();
   document.querySelectorAll('.cell').forEach(cell => cell.style.setProperty('--region', palette[Number(cell.dataset.region) % palette.length]));
 }
 function syncThemeInputs() {
   document.querySelectorAll('[data-theme-palette]').forEach(input => { input.value = theme.palette[Number(input.dataset.themePalette)]; });
-  document.querySelector('[data-theme-key="boardLine"]').value = theme.boardLine;
-  document.querySelector('[data-theme-key="paper"]').value = theme.paper;
+  document.querySelector('[data-theme-key="boardLine"]').value = effectiveColor('boardLine');
+  document.querySelector('[data-theme-key="paper"]').value = effectiveColor('paper');
+  document.querySelector('#color-scheme').value = readColorScheme();
+  syncVibrateToggle();
+}
+// Haptics: touch only, 15ms for a cat and 8ms for a cross. A drag buzzes at
+// most once per cell and never twice within 60ms.
+const VIBRATE_MS = { cat: 15, mark: 8 };
+const canVibrate = typeof navigator.vibrate === 'function';
+const vibrateEnabled = () => canVibrate && localStorage.meowdokuVibrate !== '0';
+const haptics = { keys: new Set(), pendingTouch: new Set(), lastAt: 0 };
+function vibrate(kind, key) {
+  if (!vibrateEnabled()) return;
+  const now = Date.now();
+  if (key) { if (haptics.keys.has(key) || now - haptics.lastAt < 60) return; haptics.keys.add(key); }
+  haptics.lastAt = now;
+  try { navigator.vibrate(VIBRATE_MS[kind]); } catch {}
+}
+function syncVibrateToggle() {
+  const toggle = document.querySelector('#vibrate-toggle'), note = document.querySelector('#vibrate-unsupported');
+  toggle.hidden = !canVibrate; note.hidden = canVibrate;
+  toggle.setAttribute('aria-checked', String(vibrateEnabled()));
 }
 const api = async (url, options) => {
   const response = await fetch(url, options); const data = await response.json();
@@ -67,7 +101,10 @@ bindTooltips(); bindSprintDialog();
 document.querySelectorAll('[data-theme-palette]').forEach(input => input.addEventListener('input', () => { theme.palette[Number(input.dataset.themePalette)] = input.value; saveTheme(); applyTheme(); }));
 document.querySelectorAll('[data-theme-key]').forEach(input => input.addEventListener('input', () => { theme[input.dataset.themeKey] = input.value; saveTheme(); applyTheme(); }));
 document.querySelector('#reset-theme').addEventListener('click', () => { theme.palette = DEFAULT_PALETTE.slice(); theme.boardLine = DEFAULT_THEME.boardLine; theme.paper = DEFAULT_THEME.paper; saveTheme(); syncThemeInputs(); applyTheme(); });
-applyTheme();
+document.querySelector('#color-scheme').addEventListener('change', event => { localStorage.meowdokuColorScheme = event.target.value; applyColorScheme(); syncThemeInputs(); });
+darkQuery.addEventListener('change', () => { if (readColorScheme() === 'system') { applyColorScheme(); syncThemeInputs(); } });
+document.querySelector('#vibrate-toggle').addEventListener('click', () => { localStorage.meowdokuVibrate = vibrateEnabled() ? '0' : '1'; syncVibrateToggle(); if (vibrateEnabled()) vibrate('cat'); });
+applyColorScheme();
 // Right-click is reserved for puzzle annotation, not the browser context menu.
 document.addEventListener('contextmenu', event => event.preventDefault());
 document.querySelector('#admin-form').addEventListener('submit', async event => {
@@ -320,7 +357,7 @@ function bindBoard() {
       event.preventDefault(); clearTimeout(state.touchTimer);
       state.touchPointerId = event.pointerId; state.touchStartedAt = Date.now(); state.suppressClickUntil = Date.now() + 520;
       if (state.lastTouchKey === key && Date.now() - state.lastTouchAt < 360) {
-        state.lastTouchKey = null; applyMark(cell, false); chooseCell(cell); return;
+        state.lastTouchKey = null; applyMark(cell, false); chooseCell(cell, true); return;
       }
       state.lastTouchKey = key; state.lastTouchAt = Date.now();
       beginTouchMark(cell);
@@ -329,7 +366,7 @@ function bindBoard() {
   document.onpointermove = event => {
     if (!state.dragged) return;
     const cell = document.elementFromPoint(event.clientX, event.clientY)?.closest('.cell');
-    if (cell && !cell.closest('.locked')) applyMark(cell, state.dragMarking);
+    if (cell && !cell.closest('.locked')) applyMark(cell, state.dragMarking, event.pointerType === 'touch');
   };
   const endPointer = event => {
     if (event.pointerType === 'touch' && event.pointerId === state.touchPointerId) state.touchPointerId = null;
@@ -342,11 +379,12 @@ function beginTouchMark(cell) {
   if (state.dragged || cell.closest('.locked')) return;
   const key = `${cell.dataset.row}:${cell.dataset.col}`;
   state.dragged = true; state.dragMarking = !state.marks.has(key); state.suppressClickUntil = Date.now() + 700;
-  applyMark(cell, state.dragMarking);
+  haptics.keys.clear(); applyMark(cell, state.dragMarking, true);
 }
-function applyMark(cell, shouldMark) {
+function applyMark(cell, shouldMark, touch = false) {
   if (cell.classList.contains('cat') || cell.classList.contains('wrong')) return;
   const key = `${cell.dataset.row}:${cell.dataset.col}`;
+  if (touch && state.marks.has(key) !== shouldMark) vibrate('mark', key);
   if (shouldMark) state.marks.add(key); else state.marks.delete(key);
   cell.classList.toggle('mark', shouldMark); cell.textContent = shouldMark ? '×' : '';
   if (state.mode === 'multi') queueMarksSync();
@@ -362,7 +400,7 @@ function queueMarksSync() {
     if (state.mode === 'multi' && state.room) socket.emit('marks-update', { code: state.room.code, playerId: state.visitorId, marks: [...state.marks] });
   }, 150);
 }
-async function chooseCell(cell) {
+async function chooseCell(cell, touch = false) {
   if (cell.closest('.locked')) return;
   const row = Number(cell.dataset.row), col = Number(cell.dataset.col), key = `${row}:${col}`;
   if (state.cats.has(key)) return;
@@ -370,6 +408,7 @@ async function chooseCell(cell) {
     if (state.pending.has(key)) return;
     // The verdict belongs to the server, but the tap has to look answered now.
     state.pending.add(key); cell.classList.add('pending');
+    if (touch) haptics.pendingTouch.add(key);
     socket.emit('guess', { code: state.room.code, playerId: state.visitorId, row, col });
     return;
   }
@@ -377,7 +416,7 @@ async function chooseCell(cell) {
   // Practice exists to work the puzzle out, so a wrong cell is only marked.
   if (!correct && state.mode === 'practice') { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，再想想。'); const board = document.querySelector('.board'); board.classList.add('shake'); setTimeout(() => board.classList.remove('shake'), 500); return; }
   if (!correct) { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
-  state.cats.add(key); state.marks.delete(key);
+  state.cats.add(key); state.marks.delete(key); if (touch) vibrate('cat');
   if (state.mode === 'practice') {
     if (state.cats.size === state.single.size) {
       state.practiceMs = Date.now() - state.practiceStartedAt; state.singleCompleted = true;
@@ -488,8 +527,8 @@ socket.on('room-state', room => {
   }
   renderGame(); state.deathFlashRendered = true;
 });
-socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); renderGame('答對了！'); window.playSfx?.('meow'); playCatReveal(row, col); } else { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
-socket.on('match-started', () => { window.playSfx?.('go'); state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
+socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); const touch = haptics.pendingTouch.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); if (touch) vibrate('cat'); renderGame('答對了！'); window.playSfx?.('meow'); playCatReveal(row, col); } else { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
+socket.on('match-started', () => { window.playSfx?.('go'); state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); haptics.pendingTouch.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
 socket.on('player-eliminated', ({ playerId }) => { state.deathFlashId = playerId; state.deathFlashRendered = false; });
 socket.on('disconnect', () => {
   if (state.mode !== 'multi' || !state.room) return;
