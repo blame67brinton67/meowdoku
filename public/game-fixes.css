@@ -181,3 +181,20 @@
   .mode-card, .catalog-card, .lobby-card, .public-room, .primary, .dark-button, .light-button, .quiet-button { transition: none; }
   .mode-card:hover, .catalog-card:hover, .lobby-card:hover, .public-room:hover, .primary:hover, .dark-button:hover, .light-button:hover, .quiet-button:hover { transform: none; }
 }
+.person-row { display: flex; align-items: center; gap: 4px; }
+.person-row .person { flex: 1; min-width: 0; }
+.kick-button { border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; padding: 3px 8px; white-space: nowrap; }
+.kick-button:hover { border-color: #a9262f; color: #a9262f; }
+.streak { font-style: normal; font-size: 11px; color: var(--orange); }
+.board-tabs { display: flex; gap: 12px; margin-bottom: 6px; }
+.board-tabs .link-button { padding: 0; font-size: 12px; color: var(--muted); }
+.board-tabs .link-button.active { color: var(--orange); text-decoration: underline; }
+.points-rule, .restart-hint { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; }
+.blocked-list { margin-top: 12px; font-size: 12px; }
+.blocked-list p { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; }
+.blocked-list .link-button { font-size: 12px; padding: 0; }
+.room-settings { display: grid; gap: 8px; margin: 10px 0; font-size: 13px; }
+.room-settings label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.room-settings input, .room-settings select { max-width: 150px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; background: #fff; }
+.room-settings .password-row { display: flex; gap: 6px; }
+.room-settings small { color: var(--muted); font-size: 11px; }
