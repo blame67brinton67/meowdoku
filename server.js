@@ -6,12 +6,13 @@ const fs = require('fs');
 const path = require('path');
 const cookie = require('cookie');
 const { openDb } = require('./db');
-const { createAuth } = require('./auth');
+const { createAuth, sanitizeDisplayName, DISPLAY_NAME_MAX } = require('./auth');
+const { createAchievements, AVATARS, DEFAULT_AVATAR, DEFAULT_FRAME } = require('./achievements');
 const { generatePuzzle, countSolutions, clampSize, parseBoardText } = require('./puzzle');
 const { generateAsync } = require('./generator');
 const { clampSprintSeconds, clampSprintFactor, normalizeSprintMode, resolveSprintSeconds } = require('./sprint');
 const { rate } = require('./difficulty');
-const { buildLadder, validLadder, LADDER_VERSION, LADDER_LENGTH } = require('./ladder');
+const { buildLadder, validLadder, ladderChapters, chapterOf, LADDER_VERSION, LADDER_LENGTH } = require('./ladder');
 
 const app = express();
 const server = http.createServer(app);
@@ -38,6 +39,7 @@ const rooms = new Map();
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const db = openDb(DB_PATH);
 const auth = createAuth(db);
+const achievements = createAchievements(db);
 auth.purgeExpired();
 if (process.env.ADMIN_BOOTSTRAP_USER) {
   if (auth.bootstrapAdmin(process.env.ADMIN_BOOTSTRAP_USER)) console.log(`已將 ${process.env.ADMIN_BOOTSTRAP_USER} 設為管理員`);
@@ -76,6 +78,10 @@ function ensureIdentity(req, res, next) {
   next();
 }
 const isUser = req => req.identity?.kind === 'user';
+function requireUser(req, res, next) {
+  if (!isUser(req)) return res.status(401).json({ error: '登入才能使用個人主頁' });
+  next();
+}
 function requireAdmin(req, res, next) {
   if (!isUser(req)) return res.status(401).json({ error: '請先登入管理員帳號' });
   if (!req.identity.isAdmin) return res.status(403).json({ error: '只有管理員可以管理關卡' });
@@ -132,8 +138,10 @@ const MULTIPLAYER_POOL_PER_SIZE = 4;
 function publicLevel(level) {
   const rating = level.rating ? { ...level.rating } : null;
   if (rating) delete rating.solution;
-  return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt, rating };
+  return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt, rating, chapter: Number.isInteger(level.ladderIndex) ? chapterOf(level.ladderIndex).id : null };
 }
+const achievementContext = () => ({ chapters: ladderChapters(ladder) });
+const clampCount = (value, max) => Number.isFinite(Number(value)) ? Math.min(max, Math.max(0, Math.round(Number(value)))) : 0;
 // One puzzle per tick: the pool is refilled without holding up the socket
 // traffic of a match that is already running.
 function refillMultiplayerPool(size) {
@@ -236,6 +244,33 @@ app.get('/api/public-rooms', (_req, res) => {
   res.json(visibleRooms);
 });
 app.get('/api/progress/me', ensureIdentity, (req, res) => res.json({ cleared: clearedFor(req.identity) }));
+// Guests see the catalogue with nothing unlocked; nothing here needs a session.
+app.get('/api/achievements/me', (req, res) => res.json(achievements.listFor(isUser(req) ? req.identity.id : null)));
+app.get('/api/profile/me', requireUser, (req, res) => {
+  const history = auth.matchHistory(req.identity.id, HISTORY_PER_VISITOR);
+  res.json({
+    ...publicIdentity(req.identity), avatars: AVATARS, chapters: ladderChapters(ladder), cleared: auth.clearedLevels(req.identity.id),
+    ...achievements.listFor(req.identity.id),
+    stats: { matches: history.length, wins: history.filter(record => record.outcome?.rank === 1).length }
+  });
+});
+app.post('/api/profile', requireUser, (req, res) => {
+  const { displayName, avatar, frame } = req.body || {};
+  if (displayName !== undefined) {
+    const clean = sanitizeDisplayName(displayName);
+    if (!clean) return res.status(400).json({ error: `顯示名稱不能是空的（最多 ${DISPLAY_NAME_MAX} 字）` });
+    auth.setDisplayName(req.identity.id, clean);
+  }
+  if (avatar !== undefined) {
+    if (!AVATARS.includes(avatar)) return res.status(400).json({ error: '這不是內建的頭像' });
+    auth.setAvatar(req.identity.id, avatar);
+  }
+  if (frame !== undefined) {
+    if (typeof frame !== 'string' || !achievements.frameUnlocked(req.identity.id, frame)) return res.status(403).json({ error: '這個相框尚未解鎖' });
+    auth.setFrame(req.identity.id, frame);
+  }
+  res.json({ user: auth.userById(req.identity.id) });
+});
 app.get('/api/history/me', ensureIdentity, (req, res) => res.json(historyFor(req.identity)));
 // Legacy read-only paths keyed by the browser-generated visitorId, kept so the
 // JSON records from before accounts can still be looked at.
@@ -250,7 +285,7 @@ app.get('/api/history/:visitorId', (req, res) => {
   res.json(readJson(HISTORY_PATH, {})[visitorId] || []);
 });
 app.post('/api/single-complete', ensureIdentity, (req, res) => {
-  const { name, levelId } = req.body || {};
+  const { name, levelId, ms, mistakes } = req.body || {};
   const list = singleLevels();
   const levelIndex = list.findIndex(level => level.id === levelId);
   if (!name || levelIndex < 0) return res.status(400).json({ error: '資料不完整' });
@@ -259,8 +294,12 @@ app.post('/api/single-complete', ensureIdentity, (req, res) => {
   // level has since sorted in between it and the rung below.
   if (levelIndex > 0 && !cleared.includes(levelId) && !cleared.includes(list[levelIndex - 1].id)) return res.status(403).json({ error: '請先完成前一關' });
   if (isUser(req)) {
-    auth.clearLevel(req.identity.id, levelId);
-    return res.json({ ok: true, cleared: auth.clearedLevels(req.identity.id).length });
+    // The board is solved client-side, so timing and mistakes can only come
+    // from the client; they are bounded here and only feed achievements.
+    const stats = { ms: Number.isFinite(Number(ms)) && Number(ms) > 0 ? Math.round(Number(ms)) : null, hints: 0, mistakes: clampCount(mistakes, 999) };
+    const unlocked = achievements.record(req.identity.id, achievementContext(), { kind: 'single', levelId, size: list[levelIndex].size, ms: stats.ms ?? Infinity, mistakes: stats.mistakes, hints: stats.hints },
+      () => auth.clearLevel(req.identity.id, levelId, stats));
+    return res.json({ ok: true, cleared: auth.clearedLevels(req.identity.id).length, unlocked });
   }
   const scores = readJson(SCORES_PATH, {});
   const entry = scores[req.identity.id] || { name: '', cleared: [] };
@@ -293,7 +332,7 @@ function leaderboardRows(room) {
   const players = new Map();
   for (const record of room.leaderboard) {
     const current = players.get(record.playerId);
-    if (!current) players.set(record.playerId, { playerId: record.playerId, name: record.name, ms: record.ms, round: record.round, wins: record.won ? 1 : 0 });
+    if (!current) players.set(record.playerId, { playerId: record.playerId, name: record.name, avatar: record.avatar, frame: record.frame, ms: record.ms, round: record.round, wins: record.won ? 1 : 0 });
     else {
       current.wins += record.won ? 1 : 0;
       if (record.ms < current.ms) { current.ms = record.ms; current.round = record.round; current.name = record.name; }
@@ -311,7 +350,7 @@ function compactRoom(room) {
     countdownEnds: room.countdownEnds, deadline: room.deadline, sprintMode: room.sprintMode, sprintSeconds: room.sprintSeconds, sprintFactor: room.sprintFactor,
     leaderboard: leaderboardRows(room),
     players: [...room.players.values()].map(player => ({
-      id: player.id, name: player.name, host: player.id === room.hostId, spectator: player.spectator, idle: player.idle, alive: player.alive,
+      id: player.id, name: player.name, avatar: player.avatar, frame: player.frame, host: player.id === room.hostId, spectator: player.spectator, idle: player.idle, alive: player.alive,
       found: player.found.size, completedAt: player.completedAt,
       cats: [...player.found], marks: [...player.marks], wrong: [...player.wrong]
     }))
@@ -383,7 +422,11 @@ function recordMatchHistory(room) {
       time: player.completedAt ? ((player.completedAt - room.startedAt) / 1000).toFixed(1) : null,
       cats: player.found.size, wrong: [...player.wrong]
     } };
-    if (player.kind === 'user') { auth.recordMatch(player.id, record); continue; }
+    if (player.kind === 'user') {
+      const unlocked = achievements.record(player.id, achievementContext(), { kind: 'match', size: room.puzzle.size, rank: record.outcome.rank, status: record.outcome.status }, () => auth.recordMatch(player.id, record));
+      if (unlocked.length && player.socketId) io.to(player.socketId).emit('achievements-unlocked', unlocked);
+      continue;
+    }
     guestsTouched = true;
     history[player.id] = [record, ...(history[player.id] || [])].slice(0, HISTORY_PER_VISITOR);
   }
@@ -461,7 +504,7 @@ io.on('connection', socket => {
     player.found.add(`${row}:${col}`); socket.emit('guess-result', { row, col, hit: true });
     if (player.found.size === room.puzzle.size) {
       player.completedAt = Date.now();
-      room.leaderboard.push({ playerId: player.id, name: player.name, ms: player.completedAt - room.startedAt, at: player.completedAt, round: room.round, won: !room.leaderboard.some(record => record.round === room.round && record.won) });
+      room.leaderboard.push({ playerId: player.id, name: player.name, avatar: player.avatar, frame: player.frame, ms: player.completedAt - room.startedAt, at: player.completedAt, round: room.round, won: !room.leaderboard.some(record => record.round === room.round && record.won) });
       if (room.leaderboard.length > 200) room.leaderboard.splice(0, room.leaderboard.length - 200);
       if (allPlayersResolved(room)) { finishRoom(room); return; }
       if (!room.deadline) {
@@ -575,11 +618,14 @@ io.on('connection', socket => {
 });
 function joinRoom(socket, room, { name, playerId, kind, spectator }) {
   for (const existing of room.players.values()) if (existing.id === playerId) { clearTimeout(existing.idleTimer); room.players.delete(existing.id); }
-  const player = { id: playerId, kind, name: String(name || '神秘貓奴').slice(0, 20), spectator, socketId: socket.id, idle: false, disconnectedAt: null, idleTimer: null, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
+  // Looked up fresh rather than from the handshake identity, so a frame picked
+  // on the profile page shows up in the next room without reconnecting.
+  const user = kind === 'user' ? auth.userById(playerId) : null;
+  const player = { id: playerId, kind, name: String(name || '神秘貓奴').slice(0, 20), avatar: user?.avatar || DEFAULT_AVATAR, frame: user?.frame || DEFAULT_FRAME, spectator, socketId: socket.id, idle: false, disconnectedAt: null, idleTimer: null, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
   room.players.set(playerId, player); socket.join(room.code); socket.emit('chat-backlog', room.chat); emitRoom(room); checkAllSpectator(room);
   if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
 }
 
 if (require.main === module) server.listen(PORT, () => { console.log(`MeowDoku is ready at http://localhost:${PORT}`); startLadder(); });
 
-module.exports = { app, server, io, db, auth, rooms };
+module.exports = { app, server, io, db, auth, achievements, rooms };

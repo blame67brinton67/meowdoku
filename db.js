@@ -57,6 +57,22 @@ const MIGRATIONS = [
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     claimed_at INTEGER NOT NULL
   );
+  `,
+  `
+  ALTER TABLE progress ADD COLUMN mistakes INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE achievements (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    frame TEXT,
+    position INTEGER NOT NULL
+  );
+  CREATE TABLE achievement_unlocks (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    achievement_id TEXT NOT NULL REFERENCES achievements(id) ON DELETE CASCADE,
+    unlocked_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, achievement_id)
+  );
   `
 ];
 
