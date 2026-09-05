@@ -10,7 +10,9 @@ const { stopWorker } = require('../generator');
 // require time, so a throwaway one is created first.
 process.env.MEOWDOKU_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'meowdoku-admin-'));
 delete process.env.ADMIN_BOOTSTRAP_USER;
-const LEVELS = ['A', 'B', 'C'].map((name, index) => ({ id: `lvl-${name}`, name: `關 ${name}`, createdAt: index + 1, ...generatePuzzle(4), rating: { score: (index + 1) * 10, stars: 1, hardestName: '測試' } }));
+// Scores far below anything the rater hands out, so levels published during
+// the tests always sort after these three.
+const LEVELS = ['A', 'B', 'C'].map((name, index) => ({ id: `lvl-${name}`, name: `關 ${name}`, createdAt: index + 1, ...generatePuzzle(4), rating: { score: index + 1, stars: 1, hardestName: '測試' } }));
 fs.writeFileSync(path.join(process.env.MEOWDOKU_DATA_DIR, 'levels.json'), JSON.stringify(LEVELS));
 const { server, io, auth: serverAuth, db: serverDb, rooms } = require('../server');
 
