@@ -88,7 +88,7 @@ test('login throttling: 10 failures per IP in 10 minutes cools down with 429 sec
   assert.equal((await auth.login({ username: 'throttle', password: PASSWORD, ip: '9.9.9.9' })).user.username, 'throttle');
 });
 
-test('claim-progress merges once and only once', async () => {
+test('claimVisitor merges once and only once', async () => {
   const { auth } = memoryAuth();
   const { user } = await auth.register({ username: 'claimer', password: PASSWORD });
   auth.clearLevel(user.id, 'L1');
@@ -171,13 +171,20 @@ test('admin APIs reject guests and non-admins, allow bootstrapped admins', async
   assert.equal(imported.status, 400);
 });
 
-test('claim-progress over HTTP needs a login and is one-shot', async () => {
+test('read-only routes mint no guest without a cookie; signing up absorbs the guest', async () => {
+  const before = serverDb.prepare('SELECT COUNT(*) AS n FROM guests').get().n;
+  const levels = await call('GET', '/api/levels');
+  assert.equal(levels.raw, '');
+  assert.equal((await call('GET', '/api/leaderboard')).raw, '');
+  assert.equal((await call('GET', '/api/progress/whoever')).raw, '');
+  assert.equal(serverDb.prepare('SELECT COUNT(*) AS n FROM guests').get().n, before);
   const guest = await call('GET', '/api/auth/me');
-  assert.equal((await call('POST', '/api/auth/claim-progress', { body: { visitorId: 'legacy-1' }, cookie: guest.cookie })).status, 401);
-  const { cookie } = await signUp('claim_user');
-  assert.equal((await call('POST', '/api/auth/claim-progress', { body: { visitorId: '../etc' }, cookie })).status, 400);
-  assert.equal((await call('POST', '/api/auth/claim-progress', { body: { visitorId: 'legacy-1' }, cookie })).status, 200);
-  assert.equal((await call('POST', '/api/auth/claim-progress', { body: { visitorId: 'legacy-1' }, cookie })).status, 409);
+  assert.equal(serverDb.prepare('SELECT COUNT(*) AS n FROM guests').get().n, before + 1);
+  await call('POST', '/api/single-complete', { body: { name: 'G', levelId: LEVEL.id }, cookie: guest.cookie });
+  const created = await call('POST', '/api/auth/register', { body: { username: 'absorb_user', password: PASSWORD }, cookie: guest.cookie });
+  assert.equal(created.status, 201);
+  assert.deepEqual((await call('GET', '/api/progress/me', { cookie: created.cookie })).data.cleared, [LEVEL.id]);
+  assert.deepEqual((await call('GET', '/api/progress/me', { cookie: guest.cookie })).data.cleared, [], 'the absorbed guest cookie is dead');
 });
 
 test('single-complete uses the cookie identity, not the body', async () => {

@@ -6,8 +6,6 @@ const socket = io({ autoConnect: false });
 const state = {
   // Server-issued identity; the id is what rooms and records are keyed by.
   playerId: null, user: null, guest: null,
-  // Pre-account progress lives under this browser-generated id until claimed.
-  legacyVisitorId: localStorage.visitorId || null,
   name: localStorage.meowdokuName || '',
   mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false,
   touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: ''
@@ -90,25 +88,16 @@ async function loadIdentity() {
   state.user = me.user; state.guest = me.guest; state.playerId = me.user?.id || me.guest?.id || null;
   renderAuth();
 }
-// Signing in swaps the identity cookie, so the socket and every cached view
-// start over from a reload.
-async function afterSignIn(user) {
-  state.user = user;
-  const visitorId = state.legacyVisitorId;
-  if (visitorId && !localStorage.meowdokuClaimed && confirm('要把這台瀏覽器之前的單人進度與對戰紀錄併入這個帳號嗎？（只能併入一次）')) {
-    try { await api('/api/auth/claim-progress', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ visitorId }) }); localStorage.meowdokuClaimed = '1'; }
-    catch (error) { if (/認領過/.test(error.message)) localStorage.meowdokuClaimed = '1'; else alert(error.message); }
-  }
-  window.location.reload();
-}
 document.querySelector('#auth-form').addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.currentTarget, mode = form.dataset.mode === 'register' ? 'register' : 'login', message = document.querySelector('#auth-message'), button = document.querySelector('#auth-submit');
   button.disabled = true; message.textContent = mode === 'register' ? '正在建立帳號…' : '正在登入…';
   try {
-    const { user } = await api(`/api/auth/${mode}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: document.querySelector('#auth-username').value.trim(), password: document.querySelector('#auth-password').value }) });
+    await api(`/api/auth/${mode}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: document.querySelector('#auth-username').value.trim(), password: document.querySelector('#auth-password').value }) });
     message.textContent = mode === 'register' ? '註冊成功！' : '登入成功！';
-    await afterSignIn(user);
+    // Signing in swaps the identity cookie, so the socket and every cached
+    // view start over from a reload.
+    window.location.reload();
   } catch (error) { message.textContent = error.message; button.disabled = false; }
 });
 document.querySelector('#logout-button').addEventListener('click', async () => {

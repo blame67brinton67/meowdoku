@@ -57,27 +57,25 @@ function clearSessionCookie(req, res) {
   res.append('Set-Cookie', cookie.serialize(SESSION_COOKIE, '', { httpOnly: true, sameSite: 'lax', path: '/', secure: isSecure(req), maxAge: 0 }));
 }
 const cookieToken = header => cookie.parse(header || '')[SESSION_COOKIE];
-// Every API caller has an identity: a logged-in user, or a guest minted on the
-// spot whose cookie lives only as long as the browser session.
+// A cookie is resolved on every API call, but a guest is only minted where an
+// identity is actually needed: anonymous hits on read-only routes must not be
+// able to grow the guests/sessions tables.
 app.use('/api', (req, res, next) => {
   req.sessionToken = cookieToken(req.header('cookie'));
   const resolved = auth.resolve(req.sessionToken, req.header('user-agent'));
-  if (resolved) {
-    req.identity = resolved.identity;
-    if (resolved.renewedToken) { req.sessionToken = resolved.renewedToken; setSessionCookie(req, res, resolved.renewedToken, true); }
-    return next();
-  }
-  const guest = auth.createGuest(req.header('user-agent'));
-  req.identity = guest.identity; req.sessionToken = guest.token;
-  setSessionCookie(req, res, guest.token, false);
+  req.identity = resolved?.identity || null;
+  if (resolved?.renewedToken) { req.sessionToken = resolved.renewedToken; setSessionCookie(req, res, resolved.renewedToken, true); }
   next();
 });
-const isUser = req => req.identity.kind === 'user';
-const GUEST_ONLY = '這個功能需要登入帳號；訪客資料在關閉網頁後不會保留。';
-function requireUser(req, res, next) {
-  if (!isUser(req)) return res.status(401).json({ error: GUEST_ONLY });
+function ensureIdentity(req, res, next) {
+  if (!req.identity) {
+    const guest = auth.createGuest(req.header('user-agent'));
+    req.identity = guest.identity; req.sessionToken = guest.token;
+    setSessionCookie(req, res, guest.token, false);
+  }
   next();
 }
+const isUser = req => req.identity?.kind === 'user';
 function requireAdmin(req, res, next) {
   if (!isUser(req)) return res.status(401).json({ error: '請先登入管理員帳號' });
   if (!req.identity.isAdmin) return res.status(403).json({ error: '只有管理員可以管理關卡' });
@@ -186,7 +184,7 @@ function publicIdentity(identity) {
 // A guest who signs in keeps what they just played: the guest identity came
 // from our own cookie, so it can be merged without asking.
 function absorbGuest(identity, userId) {
-  if (identity.kind !== 'guest') return;
+  if (identity?.kind !== 'guest') return;
   const scores = readJson(SCORES_PATH, {}), history = readJson(HISTORY_PATH, {});
   auth.claimVisitor(userId, identity.id, { cleared: scores[identity.id]?.cleared || [], history: history[identity.id] || [] });
   if (identity.id in scores) { delete scores[identity.id]; writeJson(SCORES_PATH, scores); }
@@ -194,7 +192,7 @@ function absorbGuest(identity, userId) {
   auth.deleteGuestSessions(identity.id);
 }
 
-app.get('/api/auth/me', (req, res) => res.json(publicIdentity(req.identity)));
+app.get('/api/auth/me', ensureIdentity, (req, res) => res.json(publicIdentity(req.identity)));
 app.post('/api/auth/register', async (req, res) => {
   if (isUser(req)) return res.status(400).json({ error: '你已經登入了' });
   const { username, password } = req.body || {};
@@ -219,16 +217,6 @@ app.post('/api/auth/logout', (req, res) => {
   clearSessionCookie(req, res);
   res.json({ ok: true });
 });
-app.post('/api/auth/claim-progress', requireUser, (req, res) => {
-  const visitorId = String(req.body?.visitorId || '');
-  if (!VISITOR_ID.test(visitorId)) return res.status(400).json({ error: '無效的玩家識別碼' });
-  const scores = readJson(SCORES_PATH, {}), history = readJson(HISTORY_PATH, {});
-  const claimed = auth.claimVisitor(req.identity.id, visitorId, { cleared: scores[visitorId]?.cleared || [], history: history[visitorId] || [] });
-  if (!claimed) return res.status(409).json({ error: '這份進度已經被認領過了' });
-  if (visitorId in scores) { delete scores[visitorId]; writeJson(SCORES_PATH, scores); }
-  if (visitorId in history) { delete history[visitorId]; writeJson(HISTORY_PATH, history); }
-  res.json({ ok: true, cleared: auth.clearedLevels(req.identity.id) });
-});
 
 app.get('/api/levels', (_req, res) => res.json(singleLevels().map(publicLevel)));
 app.get('/api/levels/:id', (req, res) => {
@@ -247,10 +235,10 @@ app.get('/api/public-rooms', (_req, res) => {
     }));
   res.json(visibleRooms);
 });
-app.get('/api/progress/me', (req, res) => res.json({ cleared: clearedFor(req.identity) }));
-app.get('/api/history/me', (req, res) => res.json(historyFor(req.identity)));
-// Legacy read-only paths keyed by the browser-generated visitorId, kept so an
-// unclaimed guest history can still be looked at before it is claimed.
+app.get('/api/progress/me', ensureIdentity, (req, res) => res.json({ cleared: clearedFor(req.identity) }));
+app.get('/api/history/me', ensureIdentity, (req, res) => res.json(historyFor(req.identity)));
+// Legacy read-only paths keyed by the browser-generated visitorId, kept so the
+// JSON records from before accounts can still be looked at.
 app.get('/api/progress/:visitorId', (req, res) => {
   const scores = readJson(SCORES_PATH, {});
   const entry = scores[req.params.visitorId];
@@ -261,7 +249,7 @@ app.get('/api/history/:visitorId', (req, res) => {
   if (!VISITOR_ID.test(visitorId)) return res.status(400).json({ error: '無效的玩家識別碼' });
   res.json(readJson(HISTORY_PATH, {})[visitorId] || []);
 });
-app.post('/api/single-complete', (req, res) => {
+app.post('/api/single-complete', ensureIdentity, (req, res) => {
   const { name, levelId } = req.body || {};
   const list = singleLevels();
   const levelIndex = list.findIndex(level => level.id === levelId);
