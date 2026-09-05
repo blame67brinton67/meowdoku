@@ -194,7 +194,7 @@ function createAuth(db, { now = Date.now } = {}) {
     upsertHistory: db.prepare('INSERT OR IGNORE INTO match_history (user_id, match_id, finished_at, record_json) VALUES (?, ?, ?, ?)'),
     history: db.prepare('SELECT record_json FROM match_history WHERE user_id = ? ORDER BY finished_at DESC LIMIT ?'),
     setDisplayName: db.prepare('UPDATE users SET display_name = ? WHERE id = ?'),
-    leaderboard: db.prepare('SELECT u.username, u.display_name, COUNT(p.level_id) AS cleared FROM users u JOIN progress p ON p.user_id = u.id GROUP BY u.id')
+    leaderboard: db.prepare('SELECT u.id, u.username, u.display_name, COUNT(p.level_id) AS cleared FROM users u JOIN progress p ON p.user_id = u.id GROUP BY u.id')
   };
 
   function issueSession({ userId = null, guestId = null, userAgent }) {
@@ -292,7 +292,7 @@ function createAuth(db, { now = Date.now } = {}) {
     recordMatch: (userId, record) => q.upsertHistory.run(userId, record.matchId, record.finishedAt, JSON.stringify(record)),
     matchHistory: (userId, limit = 50) => q.history.all(userId, limit).map(row => JSON.parse(row.record_json)),
     setDisplayName: (userId, name) => q.setDisplayName.run(name, userId),
-    userLeaderboard: () => q.leaderboard.all().map(row => ({ name: row.display_name || row.username, cleared: row.cleared })),
+    userLeaderboard: () => q.leaderboard.all().map(row => ({ id: row.id, name: row.display_name || row.username, cleared: row.cleared })),
     userById: id => { const row = q.userById.get(id); return row ? publicUser(row) : null; },
     deleteGuestSessions: guestId => q.deleteGuestSessions.run(guestId)
   };
