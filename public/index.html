@@ -27,7 +27,7 @@
       <label>關卡名稱<input id="level-name" maxlength="40" placeholder="例如：午後曬太陽" required /></label>
       <label>地圖尺寸<select id="level-size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label>
       <button class="primary" id="publish-level" value="default">產生並發布唯一解關卡</button>
-      <section class="admin-import"><p class="eyebrow">MAP IMPORT</p><h3>匯入地圖</h3><p class="hint">地圖名稱沿用上方欄位</p><textarea id="map-text" rows="8" placeholder="貼上地圖文字"></textarea><button type="button" class="primary" id="import-level">匯入地圖</button></section>
+      <section class="admin-import"><p class="eyebrow">MAP IMPORT</p><h3>匯入地圖 <span class="hint-wrap"><button type="button" class="hint-dot" aria-label="匯入說明" aria-describedby="tip-import" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-import">地圖名稱沿用上方「關卡名稱」欄位；文字格式與房間結算後「複製地圖」的輸出相同。</span></span></h3><textarea id="map-text" rows="6" placeholder="貼上地圖文字"></textarea><button type="button" class="primary" id="import-level">匯入地圖</button></section>
       <p id="admin-message" class="message"></p>
     </form>
   </dialog>
@@ -39,6 +39,24 @@
       <label>棋盤格線顏色<input type="color" data-theme-key="boardLine" /></label>
       <label>頁面背景顏色<input type="color" data-theme-key="paper" /></label>
       <button type="button" class="link-button" id="reset-theme">重設</button>
+    </form>
+  </dialog>
+  <dialog id="sprint-dialog" aria-labelledby="sprint-dialog-title">
+    <form method="dialog" class="dialog-card" id="sprint-form">
+      <button type="button" class="close" aria-label="關閉">×</button>
+      <p class="eyebrow">ROOM SETTINGS</p><h2 id="sprint-dialog-title">房間設定</h2>
+      <section class="setting-group" id="sprint-group" data-mode="fixed">
+        <p class="eyebrow">最後衝刺</p>
+        <div class="setting-row">
+          <span class="setting-label"><label for="sprint-mode">計時方式</label><span class="hint-wrap"><button type="button" class="hint-dot" aria-label="計時方式說明" aria-describedby="tip-sprint-mode" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-sprint-mode">第一位玩家完成後，其他人還能衝刺多久：固定秒數，或依第一名用時的倍數計算。</span></span></span>
+          <select id="sprint-mode"><option value="fixed">固定秒數</option><option value="multiply">第一名用時 ×</option></select>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label"><label for="sprint-value"><span class="when-fixed">衝刺秒數</span><span class="when-multiply">用時倍數</span></label><span class="hint-wrap"><button type="button" class="hint-dot" aria-label="數值範圍說明" aria-describedby="tip-sprint-value" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-sprint-value"><span class="when-fixed">可輸入 1 – 9999 秒。</span><span class="when-multiply">可輸入 0.1 – 9999 倍，例如 1.5 代表第一名用時的 1.5 倍。</span></span></span></span>
+          <input id="sprint-value" type="text" inputmode="decimal" maxlength="6" autocomplete="off" />
+        </div>
+      </section>
+      <p id="sprint-message" class="message"></p>
     </form>
   </dialog>
   <script src="/socket.io/socket.io.js"></script><script src="/sfx.js"></script><script src="/app.js"></script>
