@@ -4,6 +4,8 @@ const { Server } = require('socket.io');
 const { nanoid } = require('nanoid');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { promisify } = require('util');
 const cookie = require('cookie');
 const { openDb } = require('./db');
 const { createAuth, sanitizeDisplayName, DISPLAY_NAME_MAX } = require('./auth');
@@ -35,6 +37,8 @@ const HISTORY_PATH = path.join(DATA_DIR, 'match-history.json');
 // id and never used to build a path.
 const VISITOR_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const HISTORY_PER_VISITOR = 50, HISTORY_VISITORS = 200;
+const PASSWORD_MAX_LEN = 32, PASSWORD_FAIL_BASE = 500, PASSWORD_FAIL_CAP = 30_000;
+const scrypt = promisify(crypto.scrypt);
 const LADDER_PATH = path.join(DATA_DIR, 'ladder.json');
 const HINT_QUOTA_PATH = path.join(DATA_DIR, 'hint-quota.json');
 const LEVEL_ORDER_PATH = path.join(DATA_DIR, 'level-order.json');
@@ -194,6 +198,26 @@ async function takeMultiplayerPuzzle(size) {
   refillMultiplayerPool(normalizedSize);
   return puzzle;
 }
+// Only the derived hash lives on the room, and no payload builder copies it.
+async function hashPassword(password) {
+  const salt = crypto.randomBytes(16);
+  return { salt, hash: await scrypt(password, salt, 32) };
+}
+async function passwordMatches(stored, password) {
+  if (typeof password !== 'string' || password.length > PASSWORD_MAX_LEN) return false;
+  const hash = await scrypt(password, stored.salt, 32);
+  return crypto.timingSafeEqual(hash, stored.hash);
+}
+// Guesses at a room password back off per socket, doubling up to the cap.
+async function checkRoomPassword(socket, room, password) {
+  if (!room.password) return null;
+  if (password === undefined) return '這間房需要密碼';
+  const gate = socket.data.passwordGate || (socket.data.passwordGate = { fails: 0, lockedUntil: 0 });
+  if (Date.now() < gate.lockedUntil) return '密碼錯誤太多次，請稍後再試';
+  if (await passwordMatches(room.password, String(password ?? '').trim())) { gate.fails = 0; return null; }
+  gate.fails++; gate.lockedUntil = Date.now() + Math.min(PASSWORD_FAIL_BASE * 2 ** (gate.fails - 1), PASSWORD_FAIL_CAP);
+  return '房間密碼不正確';
+}
 const hintQuota = createHintQuota({ store: jsonFileStore(HINT_QUOTA_PATH, readJson, writeJson) });
 // The last hint handed to each visitor, so re-asking about the same position
 // (a double click, a page refresh) repeats the answer instead of charging again.
@@ -286,7 +310,7 @@ app.get('/api/public-rooms', (_req, res) => {
   const visibleRooms = [...rooms.values()]
     .filter(room => room.visibility === 'public' && room.status !== 'finished')
     .map(room => ({
-      code: room.code, name: room.name, size: room.puzzle.size, status: room.status,
+      code: room.code, name: room.name, size: room.puzzle.size, status: room.status, hasPassword: Boolean(room.password),
       players: [...room.players.values()].filter(player => !player.spectator).length,
       spectators: [...room.players.values()].filter(player => player.spectator).length
     }));
@@ -437,15 +461,38 @@ function leaderboardRows(room) {
   }
   return [...players.values()].sort((a, b) => a.ms - b.ms || a.playerId.localeCompare(b.playerId)).slice(0, 10);
 }
+// Points: unfinished 0, finished N − rank + 1 with N the racers of that round.
+// Spectators are neither counted in N nor scored, so a round's total is fixed
+// by its roster and a mid-race joiner cannot dilute anyone.
+function awardPoints(room) {
+  const participants = racers(room);
+  const finishers = participants.filter(p => p.completedAt).sort((a, b) => a.completedAt - b.completedAt);
+  for (const player of participants) {
+    const entry = room.stats.get(player.id) || { playerId: player.id, name: player.name, points: 0, streak: 0, bestStreak: 0, played: 0, completed: 0, totalMs: 0 };
+    const rank = finishers.indexOf(player) + 1;
+    entry.name = player.name; entry.avatar = player.avatar; entry.frame = player.frame; entry.played++;
+    if (rank) {
+      entry.points += participants.length - rank + 1; entry.completed++; entry.totalMs += player.completedAt - room.startedAt;
+    }
+    entry.streak = rank === 1 ? entry.streak + 1 : 0;
+    entry.bestStreak = Math.max(entry.bestStreak, entry.streak);
+    room.stats.set(player.id, entry);
+  }
+}
+function statsRows(room) {
+  return [...room.stats.values()].map(entry => ({ ...entry, averageMs: entry.completed ? Math.round(entry.totalMs / entry.completed) : null }))
+    .sort((a, b) => b.points - a.points || (a.averageMs ?? Infinity) - (b.averageMs ?? Infinity) || a.playerId.localeCompare(b.playerId));
+}
 function compactRoom(room) {
   return {
-    code: room.code, name: room.name, status: room.status, hostId: room.hostId, visibility: room.visibility,
+    code: room.code, name: room.name, status: room.status, hostId: room.hostId, visibility: room.visibility, restartPending: Boolean(room.restartPending), hasPassword: Boolean(room.password),
     // Do not reveal the region arrangement to waiting players or spectators.
     puzzle: room.status === 'playing' || room.status === 'finished'
-      ? { ...publicLevel(room.puzzle), ...(room.status === 'finished' ? { solution: room.puzzle.solution } : {}) }
+      // The answer rides along once play starts so eliminated players can export the map; cheating is not a concern here.
+      ? { ...publicLevel(room.puzzle), solution: room.puzzle.solution }
       : { id: room.puzzle.id, name: room.puzzle.name, size: room.puzzle.size },
     countdownEnds: room.countdownEnds, deadline: room.deadline, sprintMode: room.sprintMode, sprintSeconds: room.sprintSeconds, sprintFactor: room.sprintFactor,
-    leaderboard: leaderboardRows(room),
+    leaderboard: leaderboardRows(room), stats: statsRows(room), kicked: [...room.kicked.values()],
     players: [...room.players.values()].map(player => ({
       id: player.id, name: player.name, avatar: player.avatar, frame: player.frame, host: player.id === room.hostId, spectator: player.spectator, idle: player.idle, alive: player.alive,
       found: player.found.size, completedAt: player.completedAt,
@@ -467,6 +514,12 @@ function emitRoomSoon(room) {
   room.broadcastTimer = setTimeout(() => emitRoom(room), Math.max(0, ROOM_BROADCAST_INTERVAL - (Date.now() - (room.lastBroadcast || 0))));
 }
 function racers(room) { return [...room.players.values()].filter(p => !p.spectator); }
+// Payload ids are client-supplied, so host-only actions are attributed to the
+// seat this socket actually occupies.
+function hostBySocket(room, socket) {
+  const player = room && [...room.players.values()].find(p => p.socketId === socket.id);
+  return player && player.id === room.hostId ? player : null;
+}
 function reassignHost(room) {
   const people = [...room.players.values()];
   room.hostId = (people.find(p => p.socketId && !p.spectator) || people.find(p => p.socketId) || people[0])?.id || null;
@@ -537,13 +590,37 @@ function recordMatchHistory(room) {
 }
 function finishRoom(room) {
   if (room.status !== 'playing') return;
-  room.status = 'finished'; clearTimeout(room.timer);
+  room.status = 'finished'; clearTimeout(room.timer); room.timer = null;
+  awardPoints(room);
   try { recordMatchHistory(room); } catch (error) { console.error('寫入對戰紀錄失敗', error); }
   emitRoom(room); io.to(room.code).emit('game-finished', { results: orderedResults(room) });
 }
 function allPlayersResolved(room) {
   const racers = [...room.players.values()].filter(player => !player.spectator);
   return racers.length > 0 && racers.every(player => player.completedAt || !player.alive);
+}
+// Shared by leaving and being kicked: the round must still resolve when the
+// seat that vanished was the last one keeping it alive.
+function removePlayer(room, player) {
+  clearTimeout(player.idleTimer); room.players.delete(player.id);
+  if (player.id === room.hostId) reassignHost(room);
+  if (![...room.players.values()].some(p => p.socketId)) return closeRoom(room, null);
+  if (room.status === 'countdown' && !racers(room).length) { clearTimeout(room.countdownTimer); room.countdownTimer = null; room.status = 'lobby'; room.countdownEnds = null; emitRoom(room); }
+  else if (room.status === 'playing' && (!racers(room).length || allPlayersResolved(room))) finishRoom(room);
+  else emitRoom(room);
+  checkAllSpectator(room);
+}
+// Aborting a live round is the host's call, so nothing from it may stick:
+// no points, no fastest record, no history.
+function resetRound(room) {
+  const aborted = room.status === 'countdown' || room.status === 'playing';
+  clearTimeout(room.timer); clearTimeout(room.countdownTimer); room.timer = null; room.countdownTimer = null;
+  if (aborted) room.leaderboard = room.leaderboard.filter(record => record.round !== room.round);
+  room.status = 'lobby'; room.startedAt = null; room.deadline = null; room.countdownEnds = null;
+  for (const player of room.players.values()) {
+    player.alive = true; player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
+  }
+  return aborted;
 }
 
 // The handshake carries the same cookie as the API, so the socket's identity
@@ -565,13 +642,17 @@ io.on('connection', socket => {
     const code = nanoid(5).toUpperCase();
     const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId, round: 1, leaderboard: [],
       visibility: visibility === 'private' ? 'private' : 'public',
-      players: new Map(), startedAt: null, deadline: null, timer: null, spectatorTimer: null,
+      players: new Map(), kicked: new Map(), stats: new Map(), password: null, startedAt: null, deadline: null, timer: null, spectatorTimer: null,
       sprintMode: normalizeSprintMode(sprintMode, 'fixed'), sprintSeconds: clampSprintSeconds(sprintSeconds), sprintFactor: clampSprintFactor(sprintFactor), chat: [] };
     rooms.set(code, room); joinRoom(socket, room, { name, playerId, kind, spectator: false }); callback({ code });
   });
-  socket.on('join-room', ({ code, name, spectator } = {}, callback) => {
+  socket.on('join-room', async ({ code, name, spectator, password } = {}, callback) => {
     const room = rooms.get(String(code || '').toUpperCase());
     if (!room) return callback({ error: '房間不存在或已關閉' });
+    if (room.kicked.has(playerId)) return callback({ error: '你已被房主移出這個房間，無法再加入' });
+    const denied = await checkRoomPassword(socket, room, password);
+    if (denied) return callback({ error: denied, needsPassword: true });
+    if (!socket.connected || rooms.get(room.code) !== room) return callback({ error: '房間不存在或已關閉' });
     // A match's player roster locks as soon as its countdown begins.
     joinRoom(socket, room, { name, playerId, kind, spectator: Boolean(spectator) || room.status !== 'lobby' });
     callback({ ok: true, spectator: room.status !== 'lobby' || Boolean(spectator) });
@@ -580,10 +661,11 @@ io.on('connection', socket => {
     const room = rooms.get(code);
     if (!room || room.hostId !== playerId) return callback?.({ error: '只有房主可以開始' });
     if (room.status !== 'lobby') return callback?.({ error: '遊戲已開始' });
+    if (room.restartPending) return callback?.({ error: '新題目還在準備中，請稍候' });
     if (![...room.players.values()].some(player => !player.spectator)) return callback?.({ error: '至少需要一位玩家' });
     room.status = 'countdown'; room.countdownEnds = Date.now() + 3000; emitRoom(room);
     room.countdownTimer = setTimeout(() => {
-      room.status = 'playing'; room.startedAt = Date.now(); room.countdownEnds = null;
+      room.countdownTimer = null; room.status = 'playing'; room.startedAt = Date.now(); room.countdownEnds = null;
       io.to(room.code).emit('match-started'); emitRoom(room);
     }, 3000);
     callback?.({ ok: true });
@@ -637,7 +719,9 @@ io.on('connection', socket => {
   socket.on('set-lobby-role', ({ code, spectator } = {}, callback) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
     if (!room || !player) return callback?.({ error: '找不到房間成員' });
-    if (room.status !== 'lobby') return callback?.({ error: '倒數開始後不能再變更身分' });
+    // A finished round has already been scored, so switching there only affects the next one.
+    if (room.status !== 'lobby' && room.status !== 'finished') return callback?.({ error: '這局還有人在解，結束後才能變更身分' });
+    if (room.restartPending) return callback?.({ error: '房主正在準備新題目，請稍候' });
     player.spectator = Boolean(spectator); player.alive = true;
     player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
     emitRoom(room); checkAllSpectator(room); callback?.({ ok: true });
@@ -660,29 +744,95 @@ io.on('connection', socket => {
     room.sprintMode = nextMode;
     emitRoom(room); callback?.({ ok: true });
   });
-  socket.on('restart-room', async ({ code } = {}, callback) => {
+  // Every change is validated (and the new puzzle generated) before anything
+  // is applied, so a failure leaves the room exactly as it was.
+  socket.on('update-room-settings', async ({ code, size, password, clearPassword, visibility } = {}, callback) => {
+    const room = rooms.get(code), host = hostBySocket(room, socket);
+    if (!host) return callback?.({ error: '只有房主可以調整房間設定' });
+    if (room.status !== 'lobby') return callback?.({ error: '倒數開始後不能再調整房間設定' });
+    if (room.restartPending) return callback?.({ error: '新題目還在準備中，請稍候' });
+    const changes = {};
+    if (visibility !== undefined) {
+      if (visibility !== 'public' && visibility !== 'private') return callback?.({ error: '房間類型不正確' });
+      changes.visibility = visibility;
+    }
+    if (clearPassword) changes.password = null;
+    else if (password !== undefined) {
+      if (typeof password !== 'string') return callback?.({ error: '密碼必須是文字' });
+      const clean = password.trim();
+      if (!clean) return callback?.({ error: '密碼不能是空白' });
+      if (clean.length > PASSWORD_MAX_LEN) return callback?.({ error: `密碼最長 ${PASSWORD_MAX_LEN} 字` });
+      changes.password = await hashPassword(clean);
+    }
+    let nextSize = null;
+    if (size !== undefined) {
+      if (!Number.isFinite(Number(size))) return callback?.({ error: '棋盤大小不正確' });
+      nextSize = clampSize(size);
+    }
+    if (nextSize === null || nextSize === room.puzzle.size) {
+      if (rooms.get(code) !== room || room.status !== 'lobby') return callback?.({ error: '房間狀態已改變，請重新操作' });
+      Object.assign(room, changes); emitRoom(room);
+      return callback?.({ ok: true });
+    }
+    room.restartPending = true; emitRoom(room);
+    try {
+      const puzzle = await generateAsync(nextSize);
+      if (rooms.get(code) !== room) return callback?.({ error: '房間已關閉' });
+      Object.assign(room, changes); room.puzzle = puzzle;
+      for (const player of room.players.values()) { player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null; player.alive = true; }
+      io.to(room.code).emit('room-restarted', { message: `房主把棋盤改成 ${nextSize} × ${nextSize}，已換上新題目。` });
+      callback?.({ ok: true });
+    } catch (error) { callback?.({ error: error.message }); }
+    finally { room.restartPending = false; if (rooms.get(code) === room) emitRoom(room); }
+  });
+  socket.on('kick-player', ({ code, targetId } = {}, callback) => {
+    const room = rooms.get(code), host = hostBySocket(room, socket);
+    if (!host) return callback?.({ error: '只有房主可以移出玩家' });
+    const target = room.players.get(targetId);
+    if (!target) return callback?.({ error: '找不到這位成員' });
+    if (target.id === host.id) return callback?.({ error: '房主不能把自己踢出去' });
+    room.kicked.set(target.id, { id: target.id, name: target.name });
+    const targetSocket = target.socketId && io.sockets.sockets.get(target.socketId);
+    if (targetSocket) { targetSocket.emit('kicked', { code: room.code, reason: '你已被房主移出房間' }); targetSocket.leave(room.code); }
+    removePlayer(room, target);
+    callback?.({ ok: true });
+  });
+  socket.on('unblock-player', ({ code, targetId } = {}, callback) => {
     const room = rooms.get(code);
-    if (!room || room.hostId !== playerId) return callback?.({ error: '只有房主可以重新開始' });
-    if (room.status !== 'finished') return callback?.({ error: '本局尚未結束' });
+    if (!hostBySocket(room, socket)) return callback?.({ error: '只有房主可以解除封鎖' });
+    if (!room.kicked.delete(targetId)) return callback?.({ error: '這位成員不在封鎖名單中' });
+    emitRoom(room); callback?.({ ok: true });
+  });
+  // The round is reset before the new puzzle exists so a live round stops at
+  // once; start-game refuses until the puzzle has been swapped in.
+  socket.on('restart-room', async ({ code } = {}, callback) => {
+    const room = rooms.get(code), host = hostBySocket(room, socket);
+    if (!host) return callback?.({ error: '只有房主可以重新開始' });
     if (room.restartPending) return callback?.({ error: '正在準備下一局，請稍候' });
     room.restartPending = true;
+    const aborted = resetRound(room);
+    emitRoom(room); checkAllSpectator(room);
+    if (aborted) io.to(room.code).emit('room-restarted', { message: '房主重開了這一局，本局不計分。' });
     try {
       const puzzle = await generateAsync(room.puzzle.size);
-      if (!socket.connected || rooms.get(code) !== room || room.hostId !== playerId) return callback?.({ error: '房間已關閉或房主已離開' });
-      clearTimeout(room.timer); clearTimeout(room.countdownTimer);
-      room.puzzle = puzzle; room.round++; room.status = 'lobby'; room.startedAt = null; room.deadline = null; room.countdownEnds = null;
-      for (const player of room.players.values()) {
-        player.alive = true; player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null;
-      }
-      emitRoom(room); checkAllSpectator(room); callback?.({ ok: true });
+      if (rooms.get(code) !== room) return callback?.({ error: '房間已關閉' });
+      room.puzzle = puzzle; room.round++;
+      callback?.({ ok: true });
     } catch (error) { callback?.({ error: error.message }); }
-    finally { room.restartPending = false; }
+    finally { room.restartPending = false; if (rooms.get(code) === room) emitRoom(room); }
   });
-  socket.on('resume-room', ({ code, name } = {}, callback) => {
+  socket.on('resume-room', async ({ code, name, password } = {}, callback) => {
     const room = rooms.get(String(code || '').toUpperCase());
     if (!room) return callback?.({ error: '房間不存在或已關閉' });
+    if (room.kicked.has(playerId)) return callback?.({ error: '你已被房主移出這個房間，無法再加入' });
     const player = room.players.get(playerId);
-    if (!player) { joinRoom(socket, room, { name, playerId, kind, spectator: true }); return callback?.({ ok: true, spectator: true, movedToSpectator: true }); }
+    // A seat that is still held was admitted already; only a fresh seat needs the password.
+    if (!player) {
+      const denied = await checkRoomPassword(socket, room, password);
+      if (denied) return callback?.({ error: denied, needsPassword: true });
+      if (!socket.connected || rooms.get(room.code) !== room) return callback?.({ error: '房間不存在或已關閉' });
+      joinRoom(socket, room, { name, playerId, kind, spectator: true }); return callback?.({ ok: true, spectator: true, movedToSpectator: true });
+    }
     const wasIdle = player.idle;
     clearTimeout(player.idleTimer); player.idleTimer = null;
     player.socketId = socket.id; player.disconnectedAt = null; player.idle = false;
@@ -694,13 +844,7 @@ io.on('connection', socket => {
     const room = rooms.get(code); const player = room?.players.get(playerId);
     callback?.({ ok: true });
     if (!room || !player) return;
-    clearTimeout(player.idleTimer); room.players.delete(playerId);
-    if (playerId === room.hostId) reassignHost(room);
-    if (![...room.players.values()].some(p => p.socketId)) return closeRoom(room, null);
-    if (room.status === 'countdown' && !racers(room).length) { clearTimeout(room.countdownTimer); room.status = 'lobby'; room.countdownEnds = null; emitRoom(room); }
-    else if (room.status === 'playing' && (!racers(room).length || allPlayersResolved(room))) finishRoom(room);
-    else emitRoom(room);
-    checkAllSpectator(room);
+    removePlayer(room, player);
   });
   socket.on('disconnect', () => {
     for (const room of rooms.values()) {
@@ -725,4 +869,4 @@ function joinRoom(socket, room, { name, playerId, kind, spectator }) {
 
 if (require.main === module) server.listen(PORT, () => { console.log(`MeowDoku is ready at http://localhost:${PORT}`); startLadder(); });
 
-module.exports = { app, server, io, db, auth, achievements, rooms };
+module.exports = { app, server, io, db, auth, achievements, rooms, compactRoom };
