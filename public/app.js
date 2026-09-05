@@ -64,7 +64,7 @@ function syncThemeInputs() {
 const VIBRATE_MS = { cat: 15, mark: 8 };
 const canVibrate = typeof navigator.vibrate === 'function';
 const vibrateEnabled = () => canVibrate && localStorage.meowdokuVibrate !== '0';
-const haptics = { keys: new Set(), lastAt: 0 };
+const haptics = { keys: new Set(), pendingTouch: new Set(), lastAt: 0 };
 function vibrate(kind, key) {
   if (!vibrateEnabled()) return;
   const now = Date.now();
@@ -357,7 +357,7 @@ function bindBoard() {
       event.preventDefault(); clearTimeout(state.touchTimer);
       state.touchPointerId = event.pointerId; state.touchStartedAt = Date.now(); state.suppressClickUntil = Date.now() + 520;
       if (state.lastTouchKey === key && Date.now() - state.lastTouchAt < 360) {
-        state.lastTouchKey = null; applyMark(cell, false); if (!state.cats.has(key)) vibrate('cat'); chooseCell(cell); return;
+        state.lastTouchKey = null; applyMark(cell, false); chooseCell(cell, true); return;
       }
       state.lastTouchKey = key; state.lastTouchAt = Date.now();
       beginTouchMark(cell);
@@ -400,7 +400,7 @@ function queueMarksSync() {
     if (state.mode === 'multi' && state.room) socket.emit('marks-update', { code: state.room.code, playerId: state.visitorId, marks: [...state.marks] });
   }, 150);
 }
-async function chooseCell(cell) {
+async function chooseCell(cell, touch = false) {
   if (cell.closest('.locked')) return;
   const row = Number(cell.dataset.row), col = Number(cell.dataset.col), key = `${row}:${col}`;
   if (state.cats.has(key)) return;
@@ -408,6 +408,7 @@ async function chooseCell(cell) {
     if (state.pending.has(key)) return;
     // The verdict belongs to the server, but the tap has to look answered now.
     state.pending.add(key); cell.classList.add('pending');
+    if (touch) haptics.pendingTouch.add(key);
     socket.emit('guess', { code: state.room.code, playerId: state.visitorId, row, col });
     return;
   }
@@ -415,7 +416,7 @@ async function chooseCell(cell) {
   // Practice exists to work the puzzle out, so a wrong cell is only marked.
   if (!correct && state.mode === 'practice') { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，再想想。'); const board = document.querySelector('.board'); board.classList.add('shake'); setTimeout(() => board.classList.remove('shake'), 500); return; }
   if (!correct) { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
-  state.cats.add(key); state.marks.delete(key);
+  state.cats.add(key); state.marks.delete(key); if (touch) vibrate('cat');
   if (state.mode === 'practice') {
     if (state.cats.size === state.single.size) {
       state.practiceMs = Date.now() - state.practiceStartedAt; state.singleCompleted = true;
@@ -526,8 +527,8 @@ socket.on('room-state', room => {
   }
   renderGame(); state.deathFlashRendered = true;
 });
-socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); renderGame('答對了！'); window.playSfx?.('meow'); playCatReveal(row, col); } else { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
-socket.on('match-started', () => { window.playSfx?.('go'); state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
+socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); const touch = haptics.pendingTouch.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); if (touch) vibrate('cat'); renderGame('答對了！'); window.playSfx?.('meow'); playCatReveal(row, col); } else { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
+socket.on('match-started', () => { window.playSfx?.('go'); state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); haptics.pendingTouch.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
 socket.on('player-eliminated', ({ playerId }) => { state.deathFlashId = playerId; state.deathFlashRendered = false; });
 socket.on('disconnect', () => {
   if (state.mode !== 'multi' || !state.room) return;
