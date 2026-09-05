@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MeowDoku</title>
+  <script>(() => { try { const scheme = localStorage.meowdokuColorScheme; document.documentElement.dataset.theme = scheme === 'dark' || scheme === 'light' ? scheme : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; } catch { document.documentElement.dataset.theme = 'light'; } })();</script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -15,7 +16,7 @@
     <header class="topbar">
       <button id="home-button" class="brand" aria-label="返回首頁"><span>◒</span> MeowDoku</button>
       <div class="player-name"><label for="player-name">玩家</label><input id="player-name" maxlength="20" placeholder="輸入暱稱" /></div>
-      <button id="theme-button" class="quiet-button">外觀</button><button id="admin-button" class="quiet-button">管理關卡</button><button id="mute-button" class="quiet-button" aria-label="音效開關">🔊</button>
+      <button id="theme-button" class="quiet-button">設定</button><button id="admin-button" class="quiet-button">管理關卡</button><button id="mute-button" class="quiet-button" aria-label="音效開關">🔊</button>
     </header>
     <section id="view" aria-live="polite"></section>
   </main>
@@ -34,11 +35,24 @@
   <dialog id="theme-dialog">
     <form id="theme-form" method="dialog" class="dialog-card">
       <button type="button" class="close" aria-label="關閉">×</button>
-      <p class="eyebrow">APPEARANCE</p><h2>自訂顏色</h2>
+      <p class="eyebrow">SETTINGS</p><h2>設定</h2>
+      <section class="setting-group">
+        <p class="eyebrow">外觀與回饋</p>
+        <div class="setting-row">
+          <span class="setting-label"><label for="color-scheme">配色模式</label><span class="hint-wrap"><button type="button" class="hint-dot" aria-label="配色模式說明" aria-describedby="tip-color-scheme" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-color-scheme">「跟隨系統」會依裝置的深淺色設定自動切換。下方自訂的背景與格線顏色不會被暗色模式覆蓋。</span></span></span>
+          <select id="color-scheme"><option value="system">跟隨系統</option><option value="light">亮色</option><option value="dark">暗色</option></select>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label"><span id="vibrate-label">觸控震動</span><span class="hint-wrap"><button type="button" class="hint-dot" aria-label="觸控震動說明" aria-describedby="tip-vibrate" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-vibrate">手機上雙擊放置貓咪、滑動劃叉時輕微震動；滑鼠操作不會震動。iOS Safari 不支援震動，此設定在 iPhone 上無效。</span></span></span>
+          <button type="button" class="toggle" id="vibrate-toggle" role="switch" aria-checked="true" aria-labelledby="vibrate-label"></button><small class="setting-note" id="vibrate-unsupported" hidden>此裝置不支援震動</small>
+        </div>
+      </section>
+      <section class="setting-group"><p class="eyebrow">自訂顏色</p>
       <fieldset class="theme-colors"><legend>區域顏色（N × N 會使用前 N 種）</legend><label>顏色 1<input type="color" data-theme-palette="0" /></label><label>顏色 2<input type="color" data-theme-palette="1" /></label><label>顏色 3<input type="color" data-theme-palette="2" /></label><label>顏色 4<input type="color" data-theme-palette="3" /></label><label>顏色 5<input type="color" data-theme-palette="4" /></label><label>顏色 6<input type="color" data-theme-palette="5" /></label><label>顏色 7<input type="color" data-theme-palette="6" /></label><label>顏色 8<input type="color" data-theme-palette="7" /></label><label>顏色 9<input type="color" data-theme-palette="8" /></label><label>顏色 10<input type="color" data-theme-palette="9" /></label><label>顏色 11<input type="color" data-theme-palette="10" /></label><label>顏色 12<input type="color" data-theme-palette="11" /></label></fieldset>
       <label>棋盤格線顏色<input type="color" data-theme-key="boardLine" /></label>
       <label>頁面背景顏色<input type="color" data-theme-key="paper" /></label>
-      <button type="button" class="link-button" id="reset-theme">重設</button>
+      <button type="button" class="link-button" id="reset-theme">重設顏色</button>
+      </section>
     </form>
   </dialog>
   <dialog id="sprint-dialog" aria-labelledby="sprint-dialog-title">

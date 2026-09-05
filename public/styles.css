@@ -14,6 +14,7 @@
   --surface-raised: rgba(var(--surface-rgb), .72);
   --surface-strong: rgba(var(--surface-rgb), .94);
   --surface-solid: #fff;
+  --on-board-rgb: 255, 255, 255;
   --surface-cream: #f8ead1;
   --surface-sand-from: #f4ead8;
   --surface-sand-to: #e7dcc8;
@@ -52,6 +53,7 @@
   --bronze: #f0dcc6;
   --level-number: #c8c2b7;
   --button-disabled: #9d9b96;
+  --disabled-fade: .62;
   --shadow-color: 60, 48, 32;
   --shadow-ink: 30, 32, 41;
   --overlay: rgba(20, 20, 26, .4);
@@ -72,6 +74,62 @@
   --shadow-lift: 0 18px 38px rgba(var(--shadow-color), .16);
   --shadow-dialog: 0 24px 64px rgba(var(--shadow-ink), .26);
   --focus: 0 0 0 3px rgba(var(--accent-rgb), .34);
+}
+/* Dark scheme: only the tokens change. --paper and --board-line here are the
+   defaults app.js falls back to while the player has not picked their own
+   (keep in sync with DARK_THEME in app.js). */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --text: #eceef3;
+  --text-rgb: 236, 238, 243;
+  --text-muted: #b4b8c3;
+  --text-on-accent: #15161c;
+  --paper: #1b1c23;
+  --board-line: #3d404b;
+  --surface-rgb: 44, 46, 56;
+  --surface-solid: #2c2e38;
+  --surface-cream: #262830;
+  --surface-sand-from: #2c2e38;
+  --surface-sand-to: #22242c;
+  --surface-mint-from: #23302c;
+  --surface-mint-to: #1e2824;
+  --surface-warm-from: #2d2a26;
+  --surface-warm-to: #262320;
+  --surface-parchment-from: #2e2c28;
+  --surface-parchment-to: #21201d;
+  --surface-disabled: #24252c;
+  --divider: rgba(236, 238, 243, .1);
+  --accent: #ff8f62;
+  --accent-rgb: 255, 143, 98;
+  --secondary: #72d2c5;
+  --secondary-rgb: 114, 210, 197;
+  --secondary-deep-from: #1f5f59;
+  --secondary-deep-to: #143f3b;
+  --secondary-deep-alt: #123935;
+  --secondary-tint: #1f4a45;
+  --danger: #ff6b6b;
+  --danger-text: #ff9a9a;
+  --danger-rgb: 255, 107, 107;
+  --danger-flash: rgba(255, 107, 107, .35);
+  --success-text: rgba(111, 208, 150, .35);
+  --success-from: #1f3a2a;
+  --success-to: #182d21;
+  --solo-from: #7a5810;
+  --solo-to: #573e0a;
+  --hero-blob-pink: #45292f;
+  --hero-blob-yellow: #453a1d;
+  --gold: #4a3d18;
+  --silver: #383a42;
+  --bronze: #4a3526;
+  --level-number: #7d808c;
+  --button-disabled: #a4a7b3;
+  --disabled-fade: .8;
+  --shadow-color: 0, 0, 0;
+  --shadow-ink: 0, 0, 0;
+  --overlay: rgba(0, 0, 0, .6);
+  --tooltip-bg: #eceef3;
+  --tooltip-text: #15161c;
+  --pink: #f29fb0;
 }
 
 * { box-sizing: border-box; }
@@ -223,6 +281,7 @@ dialog::backdrop { background: var(--overlay); backdrop-filter: blur(3px); anima
 .toggle::after { content: ''; position: absolute; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface-solid); box-shadow: 0 1px 3px rgba(var(--shadow-ink), .25); transition: transform .18s; }
 .toggle[aria-checked="true"] { background: var(--secondary); }
 .toggle[aria-checked="true"]::after { transform: translateX(20px); }
+.setting-note { justify-self: end; color: var(--text-muted); font-size: 12px; }
 
 /* Tooltips: the dot is the trigger, the bubble is fixed-positioned by app.js
    so no overflow:hidden ancestor can clip it. */
