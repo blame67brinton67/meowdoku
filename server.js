@@ -83,7 +83,7 @@ const MULTIPLAYER_POOL_PER_SIZE = 4;
 function publicLevel(level) {
   const rating = level.rating ? { ...level.rating } : null;
   if (rating) delete rating.solution;
-  return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt, rating };
+  return { id: level.id, name: level.name, ladder: level.ladder || null, size: level.size, regions: level.regions, createdAt: level.createdAt, rating };
 }
 // One puzzle per tick: the pool is refilled without holding up the socket
 // traffic of a match that is already running.

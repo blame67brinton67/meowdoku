@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { validLadder, rung, ratingOf, LADDER_VERSION, LADDER_LENGTH } = require('../ladder');
+const { validLadder, rung, ratingOf, ladderTitle, LADDER_VERSION, LADDER_LENGTH } = require('../ladder');
 const { generatePuzzle } = require('../puzzle');
 
 const rungLevel = (id, score) => ({ id, size: 2, regions: [0, 0, 1, 1], solution: [], rating: { score, stars: 1 } });
@@ -29,6 +29,33 @@ test('the target band climbs and never sinks below the rung underneath', () => {
   assert.ok(rung(0).target < rung(LADDER_LENGTH - 1).target);
   // Widening only ever loosens the band, so a stuck rung cannot get stricter.
   assert.ok(rung(20, 1, 0).hi > rung(20, 0, 0).hi);
+});
+
+test('the 48 rung titles are distinct, deterministic and chaptered', () => {
+  const titles = Array.from({ length: LADDER_LENGTH }, (_, index) => ladderTitle(index));
+  assert.strictEqual(new Set(titles.map(title => title.name)).size, LADDER_LENGTH);
+  for (const [index, title] of titles.entries()) {
+    assert.deepStrictEqual(ladderTitle(index), title);
+    assert.match(title.name, /^\p{Script=Han}+$/u);
+    assert.ok(!title.name.includes('階'));
+    assert.strictEqual(title.ladder.stage, index + 1);
+    assert.ok(title.ladder.chapterStage >= 1 && title.ladder.chapterStage <= title.ladder.chapterLength);
+    assert.strictEqual((title.ladder.chapterIndex - 1) * title.ladder.chapterLength + title.ladder.chapterStage, index + 1);
+  }
+  assert.strictEqual(new Set(titles.map(title => title.ladder.chapter)).size, LADDER_LENGTH / titles[0].ladder.chapterLength);
+  assert.notStrictEqual(titles[0].ladder.chapter, titles[LADDER_LENGTH - 1].ladder.chapter);
+});
+
+test('renaming a stored ladder keeps ids, boards and ratings intact', () => {
+  const stored = [{ ...rungLevel('a', 10), name: '第 001 階 · 舊名', ladderIndex: 0 }, { ...rungLevel('b', 20), name: '第 002 階 · 舊名', ladderIndex: 1 }];
+  const levels = validLadder({ version: LADDER_VERSION, levels: stored });
+  assert.deepStrictEqual(levels.map(level => level.id), ['a', 'b']);
+  assert.deepStrictEqual(levels.map(level => level.regions), stored.map(level => level.regions));
+  assert.deepStrictEqual(levels.map(level => level.rating), stored.map(level => level.rating));
+  assert.deepStrictEqual(levels.map(level => level.name), [ladderTitle(0).name, ladderTitle(1).name]);
+  assert.strictEqual(levels[1].ladder.stage, 2);
+  // Rungs stored before ladderIndex existed are titled by their position.
+  assert.strictEqual(validLadder({ version: LADDER_VERSION, levels: [rungLevel('a', 10), rungLevel('b', 20)] })[1].name, ladderTitle(1).name);
 });
 
 test('a rung carries the rating fields the client renders', () => {
