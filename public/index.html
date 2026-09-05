@@ -62,12 +62,13 @@
     <form id="theme-form" method="dialog" class="dialog-card">
       <button type="button" class="close" aria-label="關閉">×</button>
       <p class="eyebrow">APPEARANCE</p><h2>自訂顏色</h2>
+      <fieldset class="theme-presets"><legend>棋盤主題</legend><div id="theme-preset-list" role="radiogroup"></div><p class="theme-preset-hint" id="theme-preset-hint"></p></fieldset>
       <fieldset class="theme-colors"><legend>區域顏色（N × N 會使用前 N 種）</legend><label>顏色 1<input type="color" data-theme-palette="0" /></label><label>顏色 2<input type="color" data-theme-palette="1" /></label><label>顏色 3<input type="color" data-theme-palette="2" /></label><label>顏色 4<input type="color" data-theme-palette="3" /></label><label>顏色 5<input type="color" data-theme-palette="4" /></label><label>顏色 6<input type="color" data-theme-palette="5" /></label><label>顏色 7<input type="color" data-theme-palette="6" /></label><label>顏色 8<input type="color" data-theme-palette="7" /></label><label>顏色 9<input type="color" data-theme-palette="8" /></label><label>顏色 10<input type="color" data-theme-palette="9" /></label><label>顏色 11<input type="color" data-theme-palette="10" /></label><label>顏色 12<input type="color" data-theme-palette="11" /></label></fieldset>
       <label>棋盤格線顏色<input type="color" data-theme-key="boardLine" /></label>
       <label>頁面背景顏色<input type="color" data-theme-key="paper" /></label>
       <button type="button" class="link-button" id="reset-theme">重設</button>
     </form>
   </dialog>
-  <script src="/socket.io/socket.io.js"></script><script src="/sfx.js"></script><script src="/app.js"></script>
+  <script src="/socket.io/socket.io.js"></script><script src="/sfx.js"></script><script src="/themes.js"></script><script src="/app.js"></script>
 </body>
 </html>

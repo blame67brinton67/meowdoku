@@ -160,7 +160,7 @@ const MULTIPLAYER_POOL_PER_SIZE = 4;
 function publicLevel(level) {
   const rating = level.rating ? { ...level.rating } : null;
   if (rating) delete rating.solution;
-  return { id: level.id, name: level.name, size: level.size, regions: level.regions, createdAt: level.createdAt, rating, chapter: Number.isInteger(level.ladderIndex) ? chapterOf(level.ladderIndex).id : null };
+  return { id: level.id, name: level.name, ladder: level.ladder || null, size: level.size, regions: level.regions, createdAt: level.createdAt, rating, chapter: Number.isInteger(level.ladderIndex) ? chapterOf(level.ladderIndex).id : null };
 }
 const achievementContext = () => ({ chapters: ladderChapters(ladder) });
 const clampCount = (value, max) => Number.isFinite(Number(value)) ? Math.min(max, Math.max(0, Math.round(Number(value)))) : 0;
