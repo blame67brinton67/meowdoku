@@ -9,6 +9,8 @@ const { generateAsync } = require('./generator');
 const { clampSprintSeconds, clampSprintFactor, normalizeSprintMode, resolveSprintSeconds } = require('./sprint');
 const { rate } = require('./difficulty');
 const { buildLadder, validLadder, LADDER_VERSION, LADDER_LENGTH } = require('./ladder');
+const { findHint, boardKey } = require('./hints');
+const { createHintQuota, jsonFileStore } = require('./hint-quota');
 
 const app = express();
 const server = http.createServer(app);
@@ -28,6 +30,7 @@ const HISTORY_PATH = path.join(DATA_DIR, 'match-history.json');
 const VISITOR_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const HISTORY_PER_VISITOR = 50, HISTORY_VISITORS = 200;
 const LADDER_PATH = path.join(DATA_DIR, 'ladder.json');
+const HINT_QUOTA_PATH = path.join(DATA_DIR, 'hint-quota.json');
 const rooms = new Map();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -115,6 +118,18 @@ async function takeMultiplayerPuzzle(size) {
   refillMultiplayerPool(normalizedSize);
   return puzzle;
 }
+const hintQuota = createHintQuota({ store: jsonFileStore(HINT_QUOTA_PATH, readJson, writeJson) });
+// The last hint handed to each visitor, so re-asking about the same position
+// (a double click, a page refresh) repeats the answer instead of charging again.
+const lastHints = new Map();
+function hintPuzzle(visitorId, { levelId, matchId }) {
+  if (typeof levelId === 'string') return singleLevels().find(level => level.id === levelId) || null;
+  if (typeof matchId === 'string') {
+    const record = (readJson(HISTORY_PATH, {})[visitorId] || []).find(item => item.matchId === matchId);
+    return record ? { id: record.matchId, size: record.size, regions: record.regions, solution: record.solution } : null;
+  }
+  return null;
+}
 function scoreRows() {
   const scores = readJson(SCORES_PATH, {});
   return Object.values(scores).sort((a, b) => b.cleared.length - a.cleared.length || a.name.localeCompare(b.name, 'zh-Hant'))
@@ -147,6 +162,29 @@ app.get('/api/history/:visitorId', (req, res) => {
   const visitorId = String(req.params.visitorId || '');
   if (!VISITOR_ID.test(visitorId)) return res.status(400).json({ error: '無效的玩家識別碼' });
   res.json(readJson(HISTORY_PATH, {})[visitorId] || []);
+});
+app.get('/api/hints/quota', (req, res) => {
+  const quota = hintQuota.get(String(req.query.visitorId || ''));
+  if (!quota) return res.status(400).json({ error: '無效的玩家識別碼' });
+  res.json(quota);
+});
+app.post('/api/hints', (req, res) => {
+  const { visitorId, levelId, matchId, cats, marks } = req.body || {};
+  if (!VISITOR_ID.test(String(visitorId || ''))) return res.status(400).json({ error: '無效的玩家識別碼' });
+  const puzzle = hintPuzzle(visitorId, { levelId, matchId });
+  if (!puzzle) return res.status(404).json({ error: '找不到關卡' });
+  const player = { cats: Array.isArray(cats) ? cats : [], marks: Array.isArray(marks) ? marks : [] };
+  const key = boardKey(puzzle.id, player);
+  const previous = lastHints.get(visitorId);
+  if (previous?.key === key) return res.json({ hint: previous.hint, quota: hintQuota.get(visitorId), charged: false });
+  const quota = hintQuota.get(visitorId);
+  if (!quota.remaining) return res.status(403).json({ error: '今天的提示用完了，明天再來領 3 次', quota });
+  const hint = findHint(puzzle, player);
+  const charge = hintQuota.consume(visitorId, puzzle.id);
+  if (!charge.ok) return res.status(403).json({ error: charge.error, quota: charge });
+  lastHints.set(visitorId, { key, hint });
+  if (lastHints.size > 1000) lastHints.delete(lastHints.keys().next().value);
+  res.json({ hint, quota: charge, charged: true });
 });
 app.post('/api/single-complete', (req, res) => {
   const { visitorId, name, levelId } = req.body || {};
