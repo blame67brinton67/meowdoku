@@ -18,6 +18,48 @@ dialog { width:min(440px,calc(100% - 30px));border:0;padding:0;background:transp
 .auth-tabs{display:flex;gap:6px;margin-bottom:14px}
 .auth-tab{flex:1;padding:8px;border:1px solid var(--board-line,#c7cad1);border-radius:999px;background:transparent;cursor:pointer;font:inherit}
 .auth-tab.active{background:var(--ink,#222);color:var(--paper,#fff);border-color:transparent}
+/* Avatars and CSS-drawn frames; the frame ids match FRAMES in achievements.js. */
+.avatar{display:inline-grid;place-items:center;width:44px;height:44px;border-radius:50%;background:var(--cream);font-size:24px;line-height:1;border:3px solid transparent;box-shadow:0 0 0 2px rgba(30,32,41,.08);flex:none;vertical-align:middle}
+.avatar.small{width:28px;height:28px;font-size:15px;border-width:2px}
+.avatar.large{width:84px;height:84px;font-size:46px;border-width:5px}
+.frame-plain{border-color:transparent}
+.frame-wood{border-color:#a8703b;box-shadow:0 0 0 2px #6b4320,inset 0 0 0 1px #d9a76a}
+.frame-leaf{border-color:#3f9a4f;border-style:dashed;box-shadow:0 0 0 2px #1f5f2c}
+.frame-bronze{border-color:#b87333;box-shadow:0 0 0 2px #7a4a1e,0 0 8px rgba(184,115,51,.6)}
+.frame-silver{border-color:#c0c6cf;border-style:double;box-shadow:0 0 0 2px #7f8792,0 0 8px rgba(192,198,207,.7)}
+.frame-gold{border-color:#e6b422;border-style:double;box-shadow:0 0 0 2px #a67c00,0 0 12px rgba(230,180,34,.75)}
+.frame-ribbon{border-color:var(--pink);box-shadow:0 0 0 2px #c64f6f,0 4px 0 0 #c64f6f}
+.frame-star{border-color:#f4c542;border-style:dotted;box-shadow:0 0 0 2px #d99a0b,0 0 10px rgba(244,197,66,.8)}
+.frame-crown{border-color:#e6b422;border-top-width:6px;border-top-style:double;box-shadow:0 0 0 2px #7a2f4e,0 0 12px rgba(230,180,34,.7)}
+.frame-flame{border-color:var(--orange);box-shadow:0 0 0 2px #c4423d,0 -6px 14px rgba(234,98,56,.7)}
+.frame-lightning{border-color:#4fc3f7;border-style:dashed;box-shadow:0 0 0 2px #0277bd,0 0 12px rgba(79,195,247,.9)}
+.frame-rainbow{border-color:transparent;background:linear-gradient(var(--cream),var(--cream)) padding-box,conic-gradient(#c4423d,#c07c12,#8aa625,#159490,#2b6cb0,#6b4b9e,#c4423d) border-box}
+.frame-moon{border-color:#4b5768;background:radial-gradient(circle at 30% 30%,#fffaf1,#dfe6f5);box-shadow:0 0 0 2px #1e2029,0 0 12px rgba(75,87,104,.8)}
+.account .avatar{margin-right:-2px}
+.leaderboard li{grid-template-columns:30px auto 1fr auto;align-items:center}
+.room-leaderboard li{align-items:center}.room-leaderboard li strong{flex:1}
+.person{grid-template-columns:22px auto 1fr auto}
+/* Profile page */
+.profile-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px;margin-top:18px}
+.profile-history{grid-column:1/-1}
+.profile-guest{max-width:560px;margin-top:18px}.profile-guest p{color:var(--muted)}
+.profile-identity{display:flex;align-items:center;gap:14px;margin-bottom:14px}.profile-identity strong{display:block;font:700 24px Fredoka,sans-serif}.profile-identity small{color:var(--muted)}
+.profile-name-form{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}.profile-name-form label{font-size:13px;color:var(--muted)}.profile-name-form input{flex:1;min-width:140px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);font:inherit}
+.picker{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 14px}
+.pick{display:grid;place-items:center;gap:4px;min-width:48px;padding:6px;border:2px solid transparent;border-radius:var(--radius-sm);background:rgba(255,255,255,.7);font:inherit;font-size:24px;cursor:pointer;transition:transform .15s,border-color .15s}
+.pick:not(:disabled):hover{transform:translateY(-2px)}.pick.selected{border-color:var(--orange)}.pick.locked{opacity:.45;cursor:not-allowed;filter:grayscale(.6)}.pick small{font-size:11px;color:var(--muted)}
+.profile-message{display:block;min-height:1.2em;color:var(--teal)}
+.big-number{margin:0 0 6px;font-size:16px}.big-number b{font:700 40px Fredoka,sans-serif;color:var(--orange)}
+.chapter-list{list-style:none;padding:0;margin:14px 0 0}.chapter-list li{display:grid;grid-template-columns:minmax(80px,auto) 1fr auto;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid rgba(32,34,42,.1);font-size:14px}.chapter-list li:last-child{border-bottom:0}
+.chapter-list .bar{display:block;height:8px;border-radius:999px;background:rgba(30,32,41,.1);overflow:hidden}.chapter-list .bar i{display:block;height:100%;background:var(--teal);border-radius:inherit;transition:width .3s}.chapter-list li.done .bar i{background:var(--orange)}.chapter-list b{font-size:13px;white-space:nowrap}
+.achievement-list{list-style:none;padding:0;margin:12px 0 0;display:grid;gap:8px;max-height:420px;overflow:auto}
+.achievement-list li{display:grid;grid-template-columns:32px 1fr;gap:10px;align-items:start;padding:8px 10px;border-radius:var(--radius-sm);background:rgba(255,255,255,.6)}.achievement-list li.locked{opacity:.6}.achievement-list .badge{font-size:22px;line-height:1.2}.achievement-list strong{display:block;font-size:15px}.achievement-list small{display:block;color:var(--muted);font-size:12px}.achievement-list .when{color:var(--teal)}
+.history-table{width:100%;border-collapse:collapse;margin-top:12px;font-size:14px}.history-table th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}.history-table td{padding:8px;border-bottom:1px solid rgba(32,34,42,.08)}.history-table td.eliminated{color:#c4423d}.history-table td.timeout{color:var(--muted)}.history-table td.solved{color:var(--teal);font-weight:600}
+/* Achievement toasts stack in a corner and never intercept clicks on the board. */
+.achievement-toasts{position:fixed;left:16px;bottom:16px;display:grid;gap:8px;z-index:60;pointer-events:none;max-width:min(340px,calc(100vw - 32px))}
+.achievement-toast{display:grid;grid-template-columns:32px 1fr;gap:10px;align-items:center;padding:10px 14px;border-radius:var(--radius-sm);background:var(--ink);color:var(--paper);box-shadow:var(--shadow-lift);animation:toast-in .3s ease-out;transition:opacity .5s,transform .5s}
+.achievement-toast.leaving{opacity:0;transform:translateY(8px)}.achievement-toast .toast-icon{font-size:24px}.achievement-toast .eyebrow{margin:0;font-size:10px;color:var(--pink)}.achievement-toast strong{display:block;font-size:15px}.achievement-toast small{display:block;font-size:12px;opacity:.8}
+@keyframes toast-in{from{opacity:0;transform:translateY(12px)}}
 .admin-dialog{width:min(560px,calc(100% - 30px))}
 .admin-dialog .dialog-card{max-height:calc(100vh - 40px);overflow:auto}
 .dialog-card textarea{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.94);color:var(--ink);font:inherit;font-family:ui-monospace,monospace;resize:vertical}

@@ -19,6 +19,13 @@ const USERNAME_HINT = '帳號需為 3–20 個英數字、底線或連字號';
 const PASSWORD_HINT = '密碼需為 8–72 個字元';
 const WEAK_HINT = '這組密碼太常見了，貓咪一猜就中，換一組吧';
 const LOGIN_FAILED = '帳號或密碼不正確';
+const DISPLAY_NAME_MAX = 20;
+// Control, format and zero-width characters are dropped so a name is always
+// visible text; length is counted in code points so emoji are not split.
+const NAME_JUNK = /[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u2064\ufeff]/g;
+function sanitizeDisplayName(value) {
+  return [...String(value ?? '').replace(NAME_JUNK, '').replace(/\s+/g, ' ').trim()].slice(0, DISPLAY_NAME_MAX).join('').trim();
+}
 
 // Lower-cased. Common leaks plus everything a cat-game player would try first.
 const WEAK_PASSWORDS = new Set([
@@ -189,12 +196,14 @@ function createAuth(db, { now = Date.now } = {}) {
     pruneFailures: db.prepare('DELETE FROM login_attempts WHERE at <= ?'),
     claimed: db.prepare('SELECT user_id FROM claimed_visitors WHERE visitor_id = ?'),
     insertClaim: db.prepare('INSERT INTO claimed_visitors (visitor_id, user_id, claimed_at) VALUES (?, ?, ?)'),
-    upsertProgress: db.prepare('INSERT OR IGNORE INTO progress (user_id, level_id, cleared_at) VALUES (?, ?, ?)'),
+    upsertProgress: db.prepare('INSERT OR IGNORE INTO progress (user_id, level_id, cleared_at, ms, hints_used, mistakes) VALUES (?, ?, ?, ?, ?, ?)'),
     cleared: db.prepare('SELECT level_id FROM progress WHERE user_id = ? ORDER BY cleared_at'),
     upsertHistory: db.prepare('INSERT OR IGNORE INTO match_history (user_id, match_id, finished_at, record_json) VALUES (?, ?, ?, ?)'),
     history: db.prepare('SELECT record_json FROM match_history WHERE user_id = ? ORDER BY finished_at DESC LIMIT ?'),
     setDisplayName: db.prepare('UPDATE users SET display_name = ? WHERE id = ?'),
-    leaderboard: db.prepare('SELECT u.id, u.username, u.display_name, COUNT(p.level_id) AS cleared FROM users u JOIN progress p ON p.user_id = u.id GROUP BY u.id')
+    setAvatar: db.prepare('UPDATE users SET avatar = ? WHERE id = ?'),
+    setFrame: db.prepare('UPDATE users SET frame = ? WHERE id = ?'),
+    leaderboard: db.prepare('SELECT u.id, u.username, u.display_name, u.avatar, u.frame, COUNT(p.level_id) AS cleared FROM users u JOIN progress p ON p.user_id = u.id GROUP BY u.id')
   };
 
   function issueSession({ userId = null, guestId = null, userAgent }) {
@@ -280,19 +289,21 @@ function createAuth(db, { now = Date.now } = {}) {
   const claimVisitor = db.transaction((userId, visitorId, { cleared = [], history = [] }) => {
     if (q.claimed.get(visitorId)) return false;
     q.insertClaim.run(visitorId, userId, now());
-    for (const levelId of cleared) q.upsertProgress.run(userId, String(levelId), now());
+    for (const levelId of cleared) q.upsertProgress.run(userId, String(levelId), now(), null, 0, null);
     for (const record of history) q.upsertHistory.run(userId, String(record.matchId), Number(record.finishedAt) || now(), JSON.stringify(record));
     return true;
   });
 
   return {
     register, login, logout, resolve, createGuest, purgeExpired, bootstrapAdmin, loginCooldown, claimVisitor,
-    clearLevel: (userId, levelId) => q.upsertProgress.run(userId, levelId, now()),
+    clearLevel: (userId, levelId, { ms = null, hints = 0, mistakes = null } = {}) => q.upsertProgress.run(userId, levelId, now(), ms, hints, mistakes),
     clearedLevels: userId => q.cleared.all(userId).map(row => row.level_id),
     recordMatch: (userId, record) => q.upsertHistory.run(userId, record.matchId, record.finishedAt, JSON.stringify(record)),
     matchHistory: (userId, limit = 50) => q.history.all(userId, limit).map(row => JSON.parse(row.record_json)),
     setDisplayName: (userId, name) => q.setDisplayName.run(name, userId),
-    userLeaderboard: () => q.leaderboard.all().map(row => ({ id: row.id, name: row.display_name || row.username, cleared: row.cleared })),
+    setAvatar: (userId, avatar) => q.setAvatar.run(avatar, userId),
+    setFrame: (userId, frame) => q.setFrame.run(frame, userId),
+    userLeaderboard: () => q.leaderboard.all().map(row => ({ id: row.id, name: row.display_name || row.username, cleared: row.cleared, avatar: row.avatar, frame: row.frame })),
     userById: id => { const row = q.userById.get(id); return row ? publicUser(row) : null; },
     deleteGuestSessions: guestId => q.deleteGuestSessions.run(guestId)
   };
@@ -301,6 +312,6 @@ function createAuth(db, { now = Date.now } = {}) {
 const DUMMY = { salt: Buffer.alloc(SALT_BYTES), hash: Buffer.alloc(KEY_BYTES) };
 
 module.exports = {
-  createAuth, hashPassword, verifyPassword, hashToken, validateUsername, validatePassword,
-  LOGIN_FAILED, SESSION_TTL, SESSION_RENEW_BELOW, GUEST_TTL, LOGIN_WINDOW, LOGIN_MAX_FAILURES, WEAK_PASSWORDS
+  createAuth, hashPassword, verifyPassword, hashToken, validateUsername, validatePassword, sanitizeDisplayName,
+  LOGIN_FAILED, DISPLAY_NAME_MAX, SESSION_TTL, SESSION_RENEW_BELOW, GUEST_TTL, LOGIN_WINDOW, LOGIN_MAX_FAILURES, WEAK_PASSWORDS
 };
