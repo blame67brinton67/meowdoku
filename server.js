@@ -309,9 +309,11 @@ app.post('/api/admin/levels', requireAdmin, async (req, res) => {
     const puzzle = await generateAsync(req.body?.size);
     const level = { id: nanoid(8), name: String(req.body?.name || `${puzzle.size} × ${puzzle.size} 新關卡`).slice(0, 40), createdAt: Date.now(), ...puzzle, rating: rate(puzzle) };
     levels = [...levels, level]; writeJson(LEVELS_PATH, levels);
-    res.status(201).json(publicLevel(level));
+    res.status(201).json(adminLevel(level));
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
+// Admins see the answer in the preview; the public catalogue never does.
+const adminLevel = level => ({ ...publicLevel(level), solution: level.solution });
 function checkBoardText(text, expectedSize) {
   if (typeof text !== 'string') return { errors: ['地圖文字必須是文字格式。'], puzzle: null };
   if (text.length > 8192) return { errors: ['地圖文字不得超過 8 KB。'], puzzle: null };
@@ -325,14 +327,14 @@ app.post('/api/admin/levels/validate', requireAdmin, (req, res) => {
   const { errors, puzzle } = checkBoardText(req.body?.text, req.body?.size);
   if (errors.length) return res.status(400).json({ ok: false, errors, error: errors[0] });
   const rating = rate(puzzle); delete rating.solution;
-  res.json({ ok: true, errors: [], size: puzzle.size, regions: puzzle.regions, rating });
+  res.json({ ok: true, errors: [], size: puzzle.size, regions: puzzle.regions, solution: puzzle.solution, rating });
 });
 app.post('/api/admin/levels/import', requireAdmin, (req, res) => {
   const { errors, puzzle } = checkBoardText(req.body?.text, req.body?.size);
   if (errors.length) return res.status(400).json({ errors, error: errors[0] });
   const level = { id: nanoid(8), name: String(req.body?.name || `${puzzle.size} × ${puzzle.size} 匯入關卡`).slice(0, 40), createdAt: Date.now(), ...puzzle, rating: rate(puzzle) };
   levels = [...levels, level]; writeJson(LEVELS_PATH, levels);
-  res.status(201).json(publicLevel(level));
+  res.status(201).json(adminLevel(level));
 });
 // The whole sequence is saved, so a level moved by hand stays put even when
 // its neighbours are re-rated; unknown or missing ids are rejected outright.

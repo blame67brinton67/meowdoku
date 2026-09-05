@@ -192,17 +192,19 @@ function renderLevelOrder() {
   list.querySelectorAll('li[draggable]').forEach(item => {
     item.ondragstart = event => { dragging = Number(item.dataset.index); item.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; };
     item.ondragend = () => { dragging = null; list.querySelectorAll('li').forEach(row => row.classList.remove('dragging', 'drop-before', 'drop-after')); };
+    // offsetY is relative to whichever child was hit, so measure against the row.
+    const upperHalf = event => { const box = item.getBoundingClientRect(); return event.clientY < box.top + box.height / 2; };
     item.ondragover = event => {
       if (dragging === null) return;
       event.preventDefault();
-      const before = event.offsetY < item.offsetHeight / 2;
+      const before = upperHalf(event);
       list.querySelectorAll('li').forEach(row => row.classList.remove('drop-before', 'drop-after'));
       item.classList.add(before ? 'drop-before' : 'drop-after');
     };
     item.ondrop = event => {
       event.preventDefault();
       if (dragging === null) return;
-      const target = Number(item.dataset.index), before = event.offsetY < item.offsetHeight / 2;
+      const target = Number(item.dataset.index), before = upperHalf(event);
       let to = before ? target : target + 1;
       if (dragging < to) to--;
       moveLevel(dragging, to);

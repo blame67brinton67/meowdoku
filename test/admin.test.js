@@ -106,10 +106,13 @@ test('dry-run validation reports all errors, publishes nothing; import needs a c
   const ok = await call('POST', '/api/admin/levels/validate', { body: { text: good, size: 5 }, cookie });
   assert.equal(ok.status, 200); assert.equal(ok.data.ok, true); assert.equal(ok.data.size, 5);
   assert.ok(ok.data.rating && typeof ok.data.rating.score === 'number'); assert.equal(ok.data.rating.solution, undefined);
+  assert.equal(ok.data.solution.length, 5, 'admins get the answer for the preview');
   assert.deepEqual(await levelIds(), before, 'validate never publishes');
   const imported = await call('POST', '/api/admin/levels/import', { body: { text: good, size: 5, name: '手繪' }, cookie });
   assert.equal(imported.status, 201); assert.equal(imported.data.name, '手繪');
-  assert.equal(imported.data.solution, undefined);
+  assert.equal(imported.data.solution.length, 5);
+  const listed = (await call('GET', '/api/levels')).data.find(level => level.id === imported.data.id);
+  assert.equal(listed.solution, undefined, 'the public catalogue still hides answers');
   assert.equal((await levelIds()).length, before.length + 1);
 });
 
@@ -117,7 +120,7 @@ test('generated level: size and name honoured, rating and board returned', async
   const cookie = await adminCookie('admin_two');
   const made = await call('POST', '/api/admin/levels', { body: { size: 4, name: '午後曬太陽' }, cookie });
   assert.equal(made.status, 201); assert.equal(made.data.size, 4); assert.equal(made.data.name, '午後曬太陽');
-  assert.equal(made.data.regions.length, 16); assert.ok(made.data.rating.stars >= 1); assert.equal(made.data.solution, undefined);
+  assert.equal(made.data.regions.length, 16); assert.ok(made.data.rating.stars >= 1); assert.equal(made.data.solution.length, 4);
 });
 
 test('reordering persists, is validated, and keeps unlock rules intact', async () => {
