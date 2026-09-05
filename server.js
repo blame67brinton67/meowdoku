@@ -509,7 +509,7 @@ io.on('connection', socket => {
       nextSize = clampSize(size);
     }
     if (nextSize === null || nextSize === room.puzzle.size) {
-      if (rooms.get(code) !== room || room.status !== 'lobby') return callback?.({ error: '房間狀态已改變，請重新操作' });
+      if (rooms.get(code) !== room || room.status !== 'lobby') return callback?.({ error: '房間狀態已改變，請重新操作' });
       Object.assign(room, changes); emitRoom(room);
       return callback?.({ ok: true });
     }
@@ -519,7 +519,7 @@ io.on('connection', socket => {
       if (rooms.get(code) !== room) return callback?.({ error: '房間已關閉' });
       Object.assign(room, changes); room.puzzle = puzzle;
       for (const player of room.players.values()) { player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null; player.alive = true; }
-      io.to(room.code).emit('room-restarted', { message: `房主把棋盤改成 ${nextSize} × ${nextSize}，已换上新題目。` });
+      io.to(room.code).emit('room-restarted', { message: `房主把棋盤改成 ${nextSize} × ${nextSize}，已換上新題目。` });
       callback?.({ ok: true });
     } catch (error) { callback?.({ error: error.message }); }
     finally { room.restartPending = false; if (rooms.get(code) === room) emitRoom(room); }
