@@ -5,7 +5,8 @@ const state = {
   visitorId: localStorage.visitorId || crypto.randomUUID(),
   name: localStorage.meowdokuName || '',
   mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false,
-  touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: ''
+  touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: '',
+  hintQuota: null, hint: null, hintLevel: 0, hintBusy: false, hintMessage: ''
 };
 localStorage.visitorId = state.visitorId;
 const anonymousTag = localStorage.meowdokuAnonTag || String(Math.floor(Math.random() * 9000) + 1000);
@@ -119,7 +120,7 @@ async function showLevels() {
 }
 async function startSingle(id) {
   if (!state.levels.length) state.levels = await api('/api/levels');
-  state.single = await api(`/api/levels/${id}`); state.mode = 'single'; state.singleCompleted = false; state.nextSingleId = null; resetBoard(); renderGame();
+  state.single = await api(`/api/levels/${id}`); state.mode = 'single'; state.singleCompleted = false; state.nextSingleId = null; resetBoard(); renderGame(); loadHintQuota();
 }
 async function showHistory() {
   const records = await api(`/api/history/${state.visitorId}`);
@@ -132,9 +133,9 @@ function startPractice(record) {
   if (!record) return;
   state.practice = record; state.mode = 'practice'; state.singleCompleted = false; state.practiceMs = null; state.practiceStartedAt = Date.now();
   state.single = { id: record.matchId, name: record.roomName, size: record.size, regions: record.regions, solution: record.solution };
-  resetBoard(); renderGame();
+  resetBoard(); renderGame(); loadHintQuota();
 }
-function resetBoard() { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.dragged = false; }
+function resetBoard() { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.dragged = false; state.hint = null; state.hintLevel = 0; state.hintMessage = ''; }
 function currentPuzzle() { return soloMode() ? state.single : state.room?.puzzle; }
 // Re-creating the whole view costs a full board rebuild plus a fresh set of
 // listeners on every cell. In a room that happens on every broadcast, which is
@@ -161,11 +162,60 @@ function renderGame(message = '') {
     return;
   }
   renderedLayout = layout;
-  view.innerHTML = `<section class="game-layout"><div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div>${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>${ratingLine(puzzle.rating)}` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div></div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${footer}${nextAction}</div>${state.mode === 'multi' ? `<div class="side-panels">${renderRoomPanel(room, me)}${renderChatPanel()}</div>` : `<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>${state.mode === 'practice' ? '練習模式：點錯不會結束' : '點錯一格，挑戰失敗'}</li></ul></aside>`}</section>`;
+  view.innerHTML = `<section class="game-layout"><div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div>${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>${ratingLine(puzzle.rating)}` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div></div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${footer}${soloMode() ? `<div class="hint-panel" id="hint-panel">${renderHintPanel()}</div>` : ''}${nextAction}</div>${state.mode === 'multi' ? `<div class="side-panels">${renderRoomPanel(room, me)}${renderChatPanel()}</div>` : `<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>${state.mode === 'practice' ? '練習模式：點錯不會結束' : '點錯一格，挑戰失敗'}</li></ul></aside>`}</section>`;
   document.querySelector('#quit').onclick = state.mode === 'practice' ? showHistory : state.mode === 'single' ? showLevels : leaveRoom;
   document.querySelector('#next-level')?.addEventListener('click', () => state.nextSingleId ? startSingle(state.nextSingleId) : showLevels());
-  bindPracticeButtons();
+  bindPracticeButtons(); bindHintPanel();
   bindBoard(); bindRoomButtons(); bindChat();
+  applyHintHighlight();
+}
+// Hints are solo-only. One request buys a three-layer hint; the layers are
+// revealed locally, so reading all the way down never costs more. Highlights
+// are CSS classes toggled on the existing cells — the board is never rebuilt.
+async function loadHintQuota() {
+  try { const quota = await api(`/api/hints/quota?visitorId=${encodeURIComponent(state.visitorId)}`); state.hintQuota = quota.remaining; }
+  catch { state.hintQuota = null; }
+  refreshHintPanel();
+}
+function renderHintPanel() {
+  const remaining = state.hintQuota;
+  const label = remaining === null ? '提示' : `提示（今天還有 ${remaining} 次）`;
+  const disabled = state.hintBusy || state.singleCompleted || remaining === 0;
+  const tiers = state.hint ? state.hint.tiers.slice(0, state.hintLevel) : [];
+  const more = state.hint && state.hintLevel < state.hint.tiers.length ? '<button class="link-button" id="hint-more">再說詳細一點 →</button>' : '';
+  return `<div class="hint-actions"><button class="quiet-button" id="hint-button" ${disabled ? 'disabled' : ''}>💡 ${label}</button>${remaining === 0 ? '<small class="hint-note">今天的提示用完了，明天再來領 3 次</small>' : ''}<small class="hint-note" id="hint-message">${escapeHtml(state.hintMessage)}</small></div>${tiers.length ? `<div class="hint-card"><p class="eyebrow">HINT · ${escapeHtml(state.hint.ruleName)}</p>${tiers.map(tier => `<p class="hint-tier">${escapeHtml(tier.text)}</p>`).join('')}${more}</div>` : ''}`;
+}
+function refreshHintPanel() {
+  const panel = document.querySelector('#hint-panel'); if (!panel || !soloMode()) return;
+  panel.innerHTML = renderHintPanel(); bindHintPanel(); applyHintHighlight();
+}
+function bindHintPanel() {
+  document.querySelector('#hint-button')?.addEventListener('click', requestHint);
+  document.querySelector('#hint-more')?.addEventListener('click', () => { if (state.hint && state.hintLevel < state.hint.tiers.length) { state.hintLevel++; refreshHintPanel(); } });
+}
+async function requestHint() {
+  if (!soloMode() || state.hintBusy || !state.single) return;
+  state.hintBusy = true; state.hintMessage = ''; refreshHintPanel();
+  const body = { visitorId: state.visitorId, cats: [...state.cats], marks: [...state.marks], ...(state.mode === 'practice' ? { matchId: state.single.id } : { levelId: state.single.id }) };
+  try {
+    const result = await api('/api/hints', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    state.hint = result.hint; state.hintLevel = 1; state.hintQuota = result.quota?.remaining ?? state.hintQuota;
+  } catch (error) { state.hintMessage = error.message; }
+  finally { state.hintBusy = false; refreshHintPanel(); }
+}
+function clearHint() { if (!state.hint && !state.hintMessage) return; state.hint = null; state.hintLevel = 0; state.hintMessage = ''; refreshHintPanel(); }
+function applyHintHighlight() {
+  const cells = document.querySelectorAll('.cell'); if (!cells.length) return;
+  const focus = soloMode() && state.hint ? state.hint.tiers[state.hintLevel - 1]?.focus : null;
+  const rows = new Set(focus?.rows || []), cols = new Set(focus?.cols || []), regions = new Set(focus?.regions || []);
+  const exact = new Set((focus?.cells || []).map(cell => `${cell.row}:${cell.col}`));
+  const any = rows.size || cols.size || regions.size || exact.size;
+  document.querySelector('.board')?.classList.toggle('hinting', Boolean(any));
+  for (const cell of cells) {
+    const key = `${cell.dataset.row}:${cell.dataset.col}`;
+    cell.classList.toggle('hl-unit', Boolean(any) && (rows.has(Number(cell.dataset.row)) || cols.has(Number(cell.dataset.col)) || regions.has(Number(cell.dataset.region))));
+    cell.classList.toggle('hl-cell', exact.has(key));
+  }
 }
 // Practice keeps the live single-player counter and adds its own clock; the
 // match comparison only appears once the board is solved.
@@ -338,6 +388,7 @@ function applyMark(cell, shouldMark) {
   if (cell.classList.contains('cat') || cell.classList.contains('wrong')) return;
   const key = `${cell.dataset.row}:${cell.dataset.col}`;
   if (shouldMark) state.marks.add(key); else state.marks.delete(key);
+  clearHint();
   cell.classList.toggle('mark', shouldMark); cell.textContent = shouldMark ? '×' : '';
   if (state.mode === 'multi') queueMarksSync();
 }
@@ -364,6 +415,7 @@ async function chooseCell(cell) {
     return;
   }
   const correct = state.single.solution.some(cat => cat.row === row && cat.col === col);
+  clearHint();
   // Practice exists to work the puzzle out, so a wrong cell is only marked.
   if (!correct && state.mode === 'practice') { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，再想想。'); const board = document.querySelector('.board'); board.classList.add('shake'); setTimeout(() => board.classList.remove('shake'), 500); return; }
   if (!correct) { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
