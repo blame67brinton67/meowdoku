@@ -28,6 +28,9 @@ test('every theme has twelve distinct, valid, deep region colours', () => {
     // Cats, marks and the red error ring sit on top; light cells wash them out.
     for (const color of theme.palette) assert.ok(luminance(color) <= 0.42, `${theme.id} ${color} is too light`);
     assert.ok(luminance(theme.paper) > 0.8, `${theme.id} paper must stay light`);
+    for (const color of [theme.dark.boardLine, theme.dark.paper]) assert.match(color, HEX, `${theme.id} dark ${color}`);
+    assert.ok(luminance(theme.dark.paper) < 0.08, `${theme.id} dark paper must stay dark`);
+    assert.ok(deltaE(theme.dark.boardLine, theme.dark.paper) >= 8, `${theme.id} dark grid lines are invisible`);
   }
 });
 
