@@ -586,7 +586,25 @@ function gameStatus(room, me) {
   const status = state.connectionLost ? '連線中斷，正在重新連線…' : state.idleNotice && me?.spectator ? state.idleNotice : room.status === 'lobby' ? '等待房主開始' : room.status === 'countdown' ? '3 秒倒數中' : room.status === 'finished' ? '本局已結束' : me?.completedAt ? '你已完成，現在可以觀戰' : me?.alive === false ? '你已被淘汰，改為觀戰' : `找到 ${state.cats.size} / ${room.puzzle.size} 隻貓咪`;
   return `<span>${status}</span>${room.deadline ? `<span class="sprint">最後衝刺 <b data-deadline="${room.deadline}">${remainingSeconds(room.deadline)}</b>s</span>` : ''}`;
 }
-function remainingSeconds(deadline) { return Math.max(0, Math.ceil((Number(deadline) - Date.now()) / 1000)); }
+function remainingSeconds(deadline) { return Math.max(0, Math.ceil((Number(deadline) - serverNow()) / 1000)); }
+// Countdowns arrive as absolute server timestamps, and a phone's clock is
+// routinely seconds away from the server's, which is what made the remaining
+// time read wrong. The offset is estimated from the fastest round trip seen,
+// since that is the sample least distorted by queueing in either direction.
+let clockOffset = 0;
+function serverNow() { return Date.now() + clockOffset; }
+function syncClock(samples = 3) {
+  if (!socket.connected) return;
+  let best = Infinity;
+  for (let i = 0; i < samples; i++) {
+    const sentAt = Date.now();
+    socket.emit('time-check', null, reply => {
+      const rtt = Date.now() - sentAt;
+      if (!reply?.now || rtt >= best) return;
+      best = rtt; clockOffset = reply.now + rtt / 2 - Date.now();
+    });
+  }
+}
 function renderRoomPanel(room, me) {
   const isHost = me?.host === true;
   const canWatch = Boolean(me?.spectator || me?.alive === false || me?.completedAt);
@@ -989,6 +1007,7 @@ socket.on('disconnect', () => {
   state.connectionLost = true; state.resumeCode = state.room.code; state.pending.clear(); renderGame();
 });
 socket.on('connect', () => {
+  syncClock();
   if (!state.resumeCode || state.mode !== 'multi') return;
   socket.emit('resume-room', { code: state.resumeCode }, result => {
     if (result?.error) return exitRoom(result.error.includes('移出') ? result.error : '房間已關閉，已回到首頁。');
@@ -1004,16 +1023,19 @@ socket.on('room-restarted', ({ message }) => { state.cats.clear(); state.marks.c
 // A rejected handshake means the cookie went stale; a fresh /me mints one.
 socket.on('connect_error', async () => { try { await loadIdentity(); } catch {} });
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && !socket.connected) socket.connect();
+  if (document.hidden) return;
+  // A suspended tab's clock can come back skewed, so the offset is remeasured.
+  if (socket.connected) syncClock(); else socket.connect();
 });
-socket.on('final-sprint', ({ deadline, sprintSeconds }) => { window.playSfx?.('sprint'); state.room.deadline = deadline; renderGame(`第一位完成！${sprintSeconds} 秒最後衝刺開始。`); });
+setInterval(() => syncClock(1), 30_000);
+socket.on('final-sprint', ({ deadline, sprintSeconds }) => { window.playSfx?.('sprint'); syncClock(1); state.room.deadline = deadline; renderGame(`第一位完成！${sprintSeconds} 秒最後衝刺開始。`); });
 socket.on('game-finished', ({ results }) => { window.lastResults = results; renderGame('本局結束！'); showFinishNotice(results); });
 socket.on('achievements-unlocked', list => { if (Array.isArray(list) && list.length) showAchievementToast(list); });
 socket.on('chat-message', message => { if (message.code !== state.room?.code) return; state.chat.push(message); if (state.chat.length > 50) state.chat.shift(); appendChatMessage(message); });
 socket.on('chat-backlog', messages => { state.chat = Array.isArray(messages) ? messages.slice(-50) : []; const log = document.querySelector('#chat-log'); if (log) { log.textContent = ''; state.chat.forEach(appendChatMessage); log.scrollTop = log.scrollHeight; } });
 setInterval(() => document.querySelectorAll('[data-deadline]').forEach(node => { const t = remainingSeconds(node.dataset.deadline); const changed = node.dataset.tickAt !== String(t); node.textContent = t; if (changed && t > 0 && t <= 5) window.playSfx?.('tick'); node.dataset.tickAt = t; }), 250);
 setInterval(() => { if (state.mode !== 'practice' || state.practiceMs != null) return; const node = document.querySelector('[data-practice]'); if (node) node.textContent = ((Date.now() - state.practiceStartedAt) / 1000).toFixed(1); }, 100);
-setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { const t = Math.max(0, Math.ceil((Number(node.dataset.countdown) - Date.now()) / 1000)); if (!node.dataset.ticked || String(t) !== node.textContent) { node.dataset.ticked = '1'; node.textContent = t; if (t > 0) window.playSfx?.('tick'); } }), 100);
+setInterval(() => document.querySelectorAll('[data-countdown]').forEach(node => { const t = Math.max(0, Math.ceil((Number(node.dataset.countdown) - serverNow()) / 1000)); if (!node.dataset.ticked || String(t) !== node.textContent) { node.dataset.ticked = '1'; node.textContent = t; if (t > 0) window.playSfx?.('tick'); } }), 100);
 
 function playCatReveal(row, col) {
   requestAnimationFrame(() => {

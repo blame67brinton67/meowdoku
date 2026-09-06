@@ -947,6 +947,9 @@ io.on('connection', socket => {
     if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
     callback?.({ ok: true, spectator: player.spectator, movedToSpectator: wasIdle && player.spectator });
   });
+  // Countdowns travel as absolute server timestamps, so a client that reads
+  // them needs to know how far its own clock sits from this one.
+  socket.on('time-check', (_payload, callback) => callback?.({ now: Date.now() }));
   socket.on('leave-room', ({ code } = {}, callback) => {
     const room = rooms.get(code); const player = room?.players.get(playerId);
     callback?.({ ok: true });

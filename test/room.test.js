@@ -384,6 +384,14 @@ test('the sweep reaps a room nobody is connected to, and leaves a live one alone
   for (const socket of [...sockets, ...idle.sockets]) socket.disconnect();
 });
 
+test('the server answers the clock check countdowns are measured against', async () => {
+  const socket = await client();
+  const before = Date.now();
+  const { now } = await emit(socket, 'time-check', null);
+  assert.ok(now >= before && now <= Date.now(), 'the reply carries the server clock');
+  socket.disconnect();
+});
+
 test('deep links to a page are served the app, unknown paths are not', async () => {
   for (const path of ['/single/lvl-1', '/multi/ABCD', '/profile/catone', '/profile']) {
     const response = await fetch(`${url}${path}`);
