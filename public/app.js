@@ -6,7 +6,7 @@ const state = {
   // Server-issued identity; the id is what rooms and records are keyed by.
   playerId: null, user: null, guest: null,
   mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false, dragPoint: null,
-  singleStartedAt: 0, singleMistakes: 0, singleAttemptId: null,
+  singleStartedAt: 0, singleMistakes: 0, singleAttemptId: null, singleFailed: false,
   touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, joining: null, idleNotice: '', pane: 'board',
   hintQuota: null, hint: null, hintLevel: 0, hintBusy: false, hintMessage: '', boardView: 'fastest'
 };
@@ -408,7 +408,7 @@ async function startSingle(id) {
   if (!state.levels.length) state.levels = await api('/api/levels');
   try { state.single = await api(`/api/levels/${id}`); }
   catch { return home(); }
-  dropRoom(); state.mode = 'single'; state.singleCompleted = false; state.nextSingleId = null;
+  dropRoom(); state.mode = 'single'; state.singleCompleted = false; state.singleFailed = false; state.nextSingleId = null;
   // Mistakes accumulate across retries of the same level until it is cleared.
   if (state.singleAttemptId !== id) { state.singleAttemptId = id; state.singleMistakes = 0; }
   state.singleStartedAt = Date.now();
@@ -427,7 +427,7 @@ function startPractice(record) {
   state.single = { id: record.matchId, name: record.roomName, size: record.size, regions: record.regions, solution: record.solution };
   resetBoard(); renderGame(); loadHintQuota();
 }
-function resetBoard() { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.dragged = false; state.hint = null; state.hintLevel = 0; state.hintMessage = ''; }
+function resetBoard() { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.dragged = false; state.singleFailed = false; state.hint = null; state.hintLevel = 0; state.hintMessage = ''; }
 function currentPuzzle() { return soloMode() ? state.single : state.room?.puzzle; }
 // Re-creating the whole view costs a full board rebuild plus a fresh set of
 // listeners on every cell. In a room that happens on every broadcast, which is
@@ -448,9 +448,11 @@ function renderGame(message = '', { board = true } = {}) {
   const hint = `<span class="hint-wrap"><button type="button" class="hint-dot" aria-label="操作說明" aria-describedby="tip-game" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-game">${hintText}</span></span>`;
   const boardArea = waitingForRoom
     ? `<div class="hidden-map"><span>${room.status === 'countdown' ? '<b data-countdown="' + room.countdownEnds + '">3</b>' : '♟'}</span><h2>${room.status === 'countdown' ? '即將開始！' : '地圖已封印'}</h2><p>${room.status === 'countdown' ? '倒數結束後，題目會同時揭曉。' : '房主開始遊戲後，所有人會同時看到題目。'}</p></div>`
-    : `<div class="board-wrap">${renderBoard(puzzle, Boolean(isViewing || state.connectionLost || (state.mode === 'multi' && room.status !== 'playing')), viewedBoard(me, isViewing))}</div>`;
-  const nextAction = state.mode === 'practice' ? practiceAction() : state.mode === 'single' && state.singleCompleted ? `<div class="next-action">${state.nextSingleId ? '<button class="primary" id="next-level">前往下一關 →</button>' : '<button class="primary" id="next-level">回到關卡列表</button>'}</div>` : '';
-  const layout = [state.mode, room?.code || '', puzzle.id || '', puzzle.size, room?.status || '', waitingForRoom, Boolean(isViewing), state.singleCompleted, state.nextSingleId, state.connectionLost].join('|');
+    : `<div class="board-wrap">${renderBoard(puzzle, Boolean(isViewing || state.connectionLost || state.singleFailed || (state.mode === 'multi' && room.status !== 'playing')), viewedBoard(me, isViewing))}</div>`;
+  const nextAction = state.mode === 'practice' ? practiceAction()
+    : state.mode === 'single' && state.singleFailed ? '<div class="next-action"><p>挑戰失敗，重來一次就好。</p><button class="primary" id="retry-level">再試一次</button></div>'
+    : state.mode === 'single' && state.singleCompleted ? `<div class="next-action">${state.nextSingleId ? '<button class="primary" id="next-level">前往下一關 →</button>' : '<button class="primary" id="next-level">回到關卡列表</button>'}</div>` : '';
+  const layout = [state.mode, room?.code || '', puzzle.id || '', puzzle.size, room?.status || '', waitingForRoom, Boolean(isViewing), state.singleCompleted, state.singleFailed, state.nextSingleId, state.connectionLost].join('|');
   if (layout === renderedLayout && document.querySelector('.game-layout')) {
     patchGame(puzzle, room, me, isViewing, message, board);
     return;
@@ -468,6 +470,7 @@ function renderGame(message = '', { board = true } = {}) {
   document.querySelectorAll('[data-pane-tab]').forEach(tab => tab.addEventListener('click', () => { state.pane = tab.dataset.paneTab; document.querySelector('.game-layout').dataset.pane = state.pane; document.querySelectorAll('[data-pane-tab]').forEach(t => t.setAttribute('aria-pressed', t === tab)); }));
   document.querySelector('#quit').onclick = state.mode === 'practice' ? showHistory : state.mode === 'single' ? showLevels : leaveRoom;
   document.querySelector('#next-level')?.addEventListener('click', () => state.nextSingleId ? startSingle(state.nextSingleId) : showLevels());
+  document.querySelector('#retry-level')?.addEventListener('click', () => startSingle(state.single.id));
   bindPracticeButtons(); bindHintPanel();
   bindBoard(); bindRoomButtons(); bindChat();
   applyHintHighlight();
@@ -662,10 +665,15 @@ function renderRoomPanel(room, me) {
     : room.leaderboard?.length
       ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3>${boardTabs}<ol>${room.leaderboard.map(row => `<li>${avatarHtml(row.avatar, row.frame, 'small')}<strong>${roomNameLink(row.name, usernameOf(row.playerId))}</strong><span>${(row.ms / 1000).toFixed(1)}s · ${row.wins} 勝 · 第 ${row.round} 局</span></li>`).join('')}</ol></div>`
       : `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3>${boardTabs}<p class="empty">完成一局後，最快紀錄會出現在這裡。</p></div>`;
-  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `${player.found}/${room.puzzle.size}` : '已淘汰'; const stat = room.stats?.find(entry => entry.playerId === player.id); const kick = isHost && player.id !== state.playerId ? `<button class="kick-button" data-kick="${escapeHtml(player.id)}" title="移出房間" aria-label="移出 ${escapeHtml(player.name)}">移出</button>` : '';
+  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const stat = room.stats?.find(entry => entry.playerId === player.id); const kick = isHost && player.id !== state.playerId ? `<button class="kick-button" data-kick="${escapeHtml(player.id)}" title="移出房間" aria-label="移出 ${escapeHtml(player.name)}">移出</button>` : '';
       // The host wears a crown and you wear a green ring; neither needs a word.
       const badges = `small${player.host ? ' crowned' : ''}${player.id === state.playerId ? ' is-me' : ''}`;
-      return `<div class="person-row ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}"><button class="person" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}${player.host ? ' title="房主"' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span>${avatarHtml(player.avatar, player.frame, badges)}</button><span class="person-id"><strong>${roomNameLink(player.name, player.username)}${stat ? streak(stat) : ''}</strong><small class="player-progress">${status}${stat ? ` · ${stat.points} 分` : ''}</small></span>${kick}</div>`; }).join('')}</div>${roleToggle}${roomSettings}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? `<button class="primary wide compact" id="start-room" ${room.restartPending ? 'disabled' : ''}>開始這局</button>` : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>` : ''}${replay}${blocked}${leaderboard}${exportMap}<button class="copy-button compact" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+      return `<div data-player="${escapeHtml(player.id)}" class="person-row ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}"><button class="person" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}${player.host ? ' title="房主"' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span>${avatarHtml(player.avatar, player.frame, badges)}</button><span class="person-id"><strong>${roomNameLink(player.name, player.username)}${stat ? streak(stat) : ''}</strong><small class="player-progress">${progressLine(room, player)}</small></span>${kick}</div>`; }).join('')}</div>${roleToggle}${roomSettings}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? `<button class="primary wide compact" id="start-room" ${room.restartPending ? 'disabled' : ''}>開始這局</button>` : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>` : ''}${replay}${blocked}${leaderboard}${exportMap}<button class="copy-button compact" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+}
+function progressLine(room, player) {
+  const stat = room.stats?.find(entry => entry.playerId === player.id);
+  const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `${player.found}/${room.puzzle.size}` : '已淘汰';
+  return `${status}${stat ? ` · ${stat.points} 分` : ''}`;
 }
 function renderChatPanel() {
   return `<aside class="chat-panel"><div><p class="eyebrow">ROOM CHAT</p><h2>房間聊天</h2></div><div class="chat-log" id="chat-log"></div><form class="chat-form" id="chat-form"><textarea id="chat-input" rows="1" maxlength="200" placeholder="跟大家說點什麼…"></textarea><button class="primary" type="submit">送出</button></form><small class="chat-notice" id="chat-notice"></small></aside>`;
@@ -720,6 +728,7 @@ function appendChatMessage(message) {
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
 function bindBoard() {
+  forgetDragGrid();
   const cells = document.querySelectorAll('.cell');
   cells.forEach(cell => {
     cell.addEventListener('click', () => { if (Date.now() >= state.suppressClickUntil) chooseCell(cell); });
@@ -730,6 +739,7 @@ function bindBoard() {
       const key = `${cell.dataset.row}:${cell.dataset.col}`;
       state.dragged = true; state.dragMarking = !state.marks.has(key);
       state.dragPoint = { x: event.clientX, y: event.clientY };
+      measureDragGrid();
       applyMark(cell, state.dragMarking);
     });
     cell.addEventListener('pointerdown', event => {
@@ -747,9 +757,11 @@ function bindBoard() {
   document.onpointermove = event => {
     if (!state.dragged) return;
     const touch = event.pointerType === 'touch';
+    let previous = null;
     for (const point of dragSamples(event)) {
-      const cell = document.elementFromPoint(point.x, point.y)?.closest('.cell');
-      if (cell && !cell.closest('.locked')) applyMark(cell, state.dragMarking, touch);
+      const cell = cellAtPoint(point.x, point.y);
+      if (cell && cell !== previous) applyMark(cell, state.dragMarking, touch);
+      previous = cell || previous;
       state.dragPoint = point;
     }
   };
@@ -765,7 +777,8 @@ function bindBoard() {
 // otherwise the cells in between are never crossed.
 function dragSamples(event) {
   const points = [];
-  const step = Math.max((document.querySelector('.cell')?.getBoundingClientRect().width || 24) / 2, 1);
+  const [left, right] = (dragGrid || measureDragGrid())?.columns[0] || [0, 24];
+  const step = Math.max((right - left) / 2, 1);
   let from = state.dragPoint;
   const coalesced = event.getCoalescedEvents?.() || [];
   const samples = coalesced.length ? coalesced : [event];
@@ -777,11 +790,36 @@ function dragSamples(event) {
   }
   return points;
 }
+// A drag crosses a cell, writes an x into it, and then has to know which cell
+// the next point sits in — and asking the document that (`elementFromPoint`)
+// makes the browser flush the write it just took, so a quick flick paid for a
+// full board relayout per interpolated point. The board is a uniform grid, so
+// it is measured once per drag and the cell is then arithmetic.
+let dragGrid = null;
+const forgetDragGrid = () => { dragGrid = null; };
+addEventListener('resize', forgetDragGrid);
+addEventListener('scroll', forgetDragGrid, { passive: true, capture: true });
+function measureDragGrid() {
+  const board = document.querySelector('.board:not(.locked)');
+  const cells = board && [...board.querySelectorAll('.cell')];
+  if (!cells?.length) return null;
+  const size = Math.round(Math.sqrt(cells.length));
+  const columns = cells.slice(0, size).map(cell => cell.getBoundingClientRect()).map(rect => [rect.left, rect.right]);
+  const rows = cells.filter((_, index) => index % size === 0).map(cell => cell.getBoundingClientRect()).map(rect => [rect.top, rect.bottom]);
+  return (dragGrid = { cells, size, columns, rows });
+}
+function cellAtPoint(x, y) {
+  const grid = dragGrid || measureDragGrid();
+  if (!grid) return null;
+  const col = grid.columns.findIndex(([left, right]) => x >= left && x <= right);
+  const row = grid.rows.findIndex(([top, bottom]) => y >= top && y <= bottom);
+  return col < 0 || row < 0 ? null : grid.cells[row * grid.size + col];
+}
 function beginTouchMark(cell) {
   if (state.dragged || cell.closest('.locked')) return;
   const key = `${cell.dataset.row}:${cell.dataset.col}`;
   state.dragged = true; state.dragMarking = !state.marks.has(key); state.suppressClickUntil = Date.now() + 700;
-  haptics.keys.clear();
+  haptics.keys.clear(); measureDragGrid();
   const box = cell.getBoundingClientRect();
   state.dragPoint = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
   applyMark(cell, state.dragMarking, true);
@@ -822,7 +860,7 @@ async function chooseCell(cell, touch = false) {
   clearHint();
   // Practice exists to work the puzzle out, so a wrong cell is only marked.
   if (!correct && state.mode === 'practice') { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，再想想。'); const board = document.querySelector('.board'); board.classList.add('shake'); setTimeout(() => board.classList.remove('shake'), 500); return; }
-  if (!correct) { state.singleMistakes++; window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
+  if (!correct) { state.singleMistakes++; state.singleFailed = true; window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake'); return; }
   state.cats.add(key); state.marks.delete(key); if (touch) vibrate('cat');
   if (state.mode === 'practice') {
     if (state.cats.size === state.single.size) {
@@ -1029,6 +1067,18 @@ socket.on('room-state', room => {
   // While you are racing, your own board only moves through your own clicks,
   // so a broadcast repaints the roster and leaves the cells alone.
   renderGame('', { board: Boolean(canWatch) }); state.deathFlashRendered = true;
+});
+// Everyone racing gets the counters, nothing else: one line of the roster is
+// rewritten in place instead of rebuilding the panel or the board.
+socket.on('room-progress', ({ code, found }) => {
+  if (state.mode !== 'multi' || state.room?.code !== code || !Array.isArray(found)) return;
+  for (const [playerId, count] of found) {
+    const player = state.room.players.find(entry => entry.id === playerId);
+    if (!player || player.found === count) continue;
+    player.found = count;
+    const line = document.querySelector(`.person-row[data-player="${CSS.escape(playerId)}"] .player-progress`);
+    if (line) line.textContent = progressLine(state.room, player);
+  }
 });
 socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); const touch = haptics.pendingTouch.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); if (touch) vibrate('cat'); renderGame('答對了！'); window.playSfx?.('meow'); playCatReveal(row, col); } else { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
 socket.on('match-started', () => { window.playSfx?.('go'); state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); haptics.pendingTouch.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });

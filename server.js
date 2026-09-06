@@ -566,6 +566,7 @@ const ROOM_BROADCAST_INTERVAL = 50;
 const MARKS_BROADCAST_INTERVAL = 250;
 function emitRoom(room) {
   clearTimeout(room.broadcastTimer); room.broadcastTimer = null;
+  clearTimeout(room.progressTimer); room.progressTimer = null;
   room.lastBroadcast = room.lastActiveAt = Date.now();
   io.to(room.code).emit('room-state', compactRoom(room));
 }
@@ -576,6 +577,16 @@ function emitRoomSoon(room, interval = ROOM_BROADCAST_INTERVAL) {
     room.lastBroadcast = room.lastActiveAt = Date.now();
     io.to(room.code).emit('room-state', compactRoom(room, { full: false }));
   }, Math.max(0, interval - (Date.now() - (room.lastBroadcast || 0))));
+}
+// While everyone is still racing, a correct click changes exactly one number
+// in everybody's roster, so it travels as that number rather than as a room
+// state: ~60 bytes instead of ~1.4 KB, and the client repaints one line.
+function emitProgressSoon(room) {
+  if (room.progressTimer || room.broadcastTimer) return;
+  room.progressTimer = setTimeout(() => {
+    room.progressTimer = null; room.lastActiveAt = Date.now();
+    io.to(room.code).emit('room-progress', { code: room.code, found: racers(room).map(player => [player.id, player.found.size]) });
+  }, ROOM_BROADCAST_INTERVAL);
 }
 function racers(room) { return [...room.players.values()].filter(p => !p.spectator); }
 // Payload ids are client-supplied, so host-only actions are attributed to the
@@ -589,7 +600,7 @@ function reassignHost(room) {
   room.hostId = (people.find(p => p.socketId && !p.spectator) || people.find(p => p.socketId) || people[0])?.id || null;
 }
 function closeRoom(room, reason) {
-  clearTimeout(room.timer); clearTimeout(room.countdownTimer); clearTimeout(room.broadcastTimer); clearTimeout(room.spectatorTimer);
+  clearTimeout(room.timer); clearTimeout(room.countdownTimer); clearTimeout(room.broadcastTimer); clearTimeout(room.progressTimer); clearTimeout(room.spectatorTimer);
   for (const player of room.players.values()) clearTimeout(player.idleTimer);
   rooms.delete(room.code);
   if (reason) io.to(room.code).emit('room-closed', { reason });
@@ -814,7 +825,9 @@ io.on('connection', socket => {
         io.to(room.code).emit('final-sprint', { deadline: room.deadline, sprintSeconds });
       }
     }
-    if (done) emitRoom(room); else emitRoomSoon(room);
+    if (done) emitRoom(room);
+    else if (boardsWatchable(room)) emitRoomSoon(room);
+    else emitProgressSoon(room);
   });
   socket.on('marks-update', ({ code, marks } = {}) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
