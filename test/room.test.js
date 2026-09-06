@@ -6,7 +6,7 @@ const path = require('path');
 const { io: connect } = require('socket.io-client');
 
 process.env.MEOWDOKU_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'meowdoku-room-test-'));
-const { server, io, rooms, compactRoom, db } = require('../server');
+const { server, io, rooms, compactRoom, db, sweepRooms } = require('../server');
 const { stopWorker } = require('../generator');
 
 let url;
@@ -335,4 +335,26 @@ test('roles can change once everyone is done, never mid-round, without touching 
   assert.equal(stat(code, hostId).played, 1);
   assert.equal(stat(code, guestId).points, 2);
   assert.equal(stat(code, thirdId).points, 3);
+});
+
+test('the sweep reaps a room nobody is connected to, and leaves a live one alone', async () => {
+  const { code, sockets } = await makeRoom(['sweeper', 'watcher']);
+  const target = room(code);
+  sweepRooms();
+  assert.ok(room(code), 'a room with connected players survives');
+
+  // Simulate the transport dying without a 'disconnect' ever reaching us.
+  for (const player of target.players.values()) { clearTimeout(player.idleTimer); player.idleTimer = null; player.socketId = null; player.disconnectedAt = Date.now() - 61_000; }
+  target.lastActiveAt = Date.now() - 61_000;
+  sweepRooms();
+  assert.equal(room(code), undefined, 'a room with nobody connected is closed');
+
+  // A room that is still connected but untouched for half an hour also goes.
+  const idle = await makeRoom(['idler']);
+  room(idle.code).lastActiveAt = Date.now() - 31 * 60_000;
+  const closed = once(idle.sockets[0], 'room-closed');
+  sweepRooms();
+  assert.equal((await closed).reason, '房間閒置太久，已自動關閉');
+  assert.equal(room(idle.code), undefined);
+  for (const socket of [...sockets, ...idle.sockets]) socket.disconnect();
 });

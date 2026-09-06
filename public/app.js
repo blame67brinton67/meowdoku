@@ -1,21 +1,15 @@
 const view = document.querySelector('#view');
-const nameInput = document.querySelector('#player-name');
 // The socket handshake carries the identity cookie, so it only connects once
 // /api/auth/me has made sure that cookie exists.
 const socket = io({ autoConnect: false });
 const state = {
   // Server-issued identity; the id is what rooms and records are keyed by.
   playerId: null, user: null, guest: null,
-  name: localStorage.meowdokuName || '',
   mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false,
   singleStartedAt: 0, singleMistakes: 0, singleAttemptId: null,
   touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: '', pane: 'board',
   hintQuota: null, hint: null, hintLevel: 0, hintBusy: false, hintMessage: '', boardView: 'fastest'
 };
-const anonymousTag = localStorage.meowdokuAnonTag || String(Math.floor(Math.random() * 9000) + 1000);
-localStorage.meowdokuAnonTag = anonymousTag;
-nameInput.value = state.name;
-nameInput.addEventListener('input', () => { state.name = nameInput.value.trim(); localStorage.meowdokuName = state.name; });
 // Deep, hue *and* lightness varied so neighbouring regions stay apart even at
 // 10 × 10; consecutive entries differ most because region ids grow by BFS.
 const DEFAULT_PALETTE = ['#c4423d', '#2b6cb0', '#c07c12', '#2c7a4b', '#6b4b9e', '#8aa625', '#b83f7d',
@@ -150,7 +144,8 @@ const ratingLine = rating => rating ? `<span class="rating"><b>${stars(rating)}<
 // Ladder rungs carry chapter/stage data; admin levels fall back to their place
 // in the sorted catalogue so both kinds read as "which level is this".
 const stageLabel = (level, fallbackIndex) => level.ladder ? `第 ${level.ladder.stage} 關 · ${escapeHtml(level.ladder.chapter)} ${level.ladder.chapterStage}/${level.ladder.chapterLength}` : `LEVEL ${String(fallbackIndex + 1).padStart(3, '0')}`;
-const playerName = () => state.name || state.user?.displayName || `神祕貓奴 #${anonymousTag}`;
+// Names come from the account only; a guest is labelled 神秘貓奴 by the room.
+const playerName = () => state.user?.displayName || '神秘貓奴';
 // Practice (upsolve) borrows the whole single-player board, only the scoring
 // and the wrong-click rule differ.
 const soloMode = () => state.mode === 'single' || state.mode === 'practice';
@@ -186,6 +181,7 @@ function renderAuth() {
   const button = document.querySelector('#auth-button'), account = document.querySelector('#account');
   const isUser = Boolean(state.user);
   button.hidden = isUser; account.hidden = !isUser;
+  document.querySelector('#guest-badge').hidden = isUser;
   if (isUser) { document.querySelector('#account-name').textContent = state.user.displayName; document.querySelector('#account-avatar').innerHTML = avatarHtml(state.user.avatar, state.user.frame, 'small'); }
   document.querySelector('#admin-button').hidden = !state.user?.isAdmin;
   document.querySelector('#guest-notice').textContent = state.guest?.notice || '';
@@ -565,7 +561,7 @@ function renderRoomPanel(room, me) {
   // Board size, visibility and password are edited in #sprint-dialog; the panel
   // only shows the resulting state and carries it for syncRoomDialog().
   const roomSettings = room.status === 'lobby'
-    ? `<p class="sprint-setting readonly" data-room-size="${room.puzzle.size}" data-room-visibility="${room.visibility === 'private' ? 'private' : 'public'}" data-room-password="${room.hasPassword ? '1' : ''}" data-room-locked="${room.restartPending ? '1' : ''}" data-room-host="${isHost ? '1' : ''}"><span>棋盤 <b>${room.puzzle.size} × ${room.puzzle.size}</b> · ${room.visibility === 'private' ? '私人房' : '公開房'} · ${room.hasPassword ? '🔒 需要密碼' : '無密碼'}</span></p>`
+    ? `<p class="sprint-setting room-summary readonly" data-room-size="${room.puzzle.size}" data-room-visibility="${room.visibility === 'private' ? 'private' : 'public'}" data-room-password="${room.hasPassword ? '1' : ''}" data-room-locked="${room.restartPending ? '1' : ''}" data-room-host="${isHost ? '1' : ''}"><span>棋盤 <b>${room.puzzle.size} × ${room.puzzle.size}</b> · ${room.visibility === 'private' ? '私人房' : '公開房'} · ${room.hasPassword ? '🔒 需要密碼' : '無密碼'}</span></p>`
     : '';
   const streak = entry => entry.streak >= 2 ? ` <em class="streak">🔥 連霸 ${entry.streak}</em>` : '';
   const boardTabs = `<div class="board-tabs"><button class="link-button ${state.boardView === 'fastest' ? 'active' : ''}" data-board-view="fastest">最快紀錄</button><button class="link-button ${state.boardView === 'points' ? 'active' : ''}" data-board-view="points">積分榜</button></div>`;
@@ -717,7 +713,7 @@ async function chooseCell(cell, touch = false) {
     window.playSfx?.('meow'); playCatReveal(row, col); return;
   }
   if (state.cats.size === state.single.size) {
-    const result = await api('/api/single-complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: playerName(), levelId: state.single.id, ms: Date.now() - state.singleStartedAt, mistakes: state.singleMistakes }) });
+    const result = await api('/api/single-complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ levelId: state.single.id, ms: Date.now() - state.singleStartedAt, mistakes: state.singleMistakes }) });
     state.cleared.add(state.single.id); state.singleAttemptId = null;
     if (result.unlocked?.length) showAchievementToast(result.unlocked);
     const currentIndex = state.levels.findIndex(level => level.id === state.single.id);
@@ -737,14 +733,14 @@ async function showMultiplayer() {
     : '<p class="empty public-empty">目前沒有公開房間。開一間讓大家加入吧！</p>';
   view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><div class="page-body"><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label><label>最後衝刺秒數<input name="sprintSeconds" type="text" inputmode="numeric" maxlength="4" value="60" /></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section></div></div>`;
   document.querySelector('#back').onclick = home;
-  document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target), button = event.target.querySelector('button[type="submit"], button'), label = button.textContent; button.disabled = true; button.textContent = '建立中…'; socket.emit('create-room', { name: playerName(), roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); };
+  document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target), button = event.target.querySelector('button[type="submit"], button'), label = button.textContent; button.disabled = true; button.textContent = '建立中…'; socket.emit('create-room', { roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); };
   document.querySelector('#join-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target); joinRoom({ code: form.get('code'), spectator: form.has('spectator') }); };
   document.querySelector('#refresh-rooms').onclick = showMultiplayer;
   document.querySelectorAll('[data-public-room]').forEach(button => button.addEventListener('click', () => joinRoom({ code: button.dataset.publicRoom, spectator: false })));
 }
 // A locked room is only discovered on the first refusal, then asked for once.
 function joinRoom({ code, spectator }, password) {
-  socket.emit('join-room', { code, name: playerName(), spectator, password }, result => {
+  socket.emit('join-room', { code, spectator, password }, result => {
     if (!result.error) return;
     if (result.needsPassword && password === undefined) { const entered = prompt('這間房需要密碼，請輸入：'); if (entered !== null) return joinRoom({ code, spectator }, entered); return; }
     alert(result.error);
@@ -771,7 +767,7 @@ function bindRoomButtons() {
 // The sprint controls live in a static dialog; the room panel only carries the
 // current values as data attributes and the dialog mirrors them on every patch.
 function syncSprintDialog() {
-  const summary = document.querySelector('.sprint-setting'), group = document.querySelector('#sprint-group'), mode = document.querySelector('#sprint-mode'), value = document.querySelector('#sprint-value');
+  const summary = document.querySelector('[data-sprint-mode]'), group = document.querySelector('#sprint-group'), mode = document.querySelector('#sprint-mode'), value = document.querySelector('#sprint-value');
   if (!group || !summary) return;
   group.dataset.mode = summary.dataset.sprintMode;
   mode.value = summary.dataset.sprintMode;
@@ -872,7 +868,7 @@ socket.on('disconnect', () => {
 });
 socket.on('connect', () => {
   if (!state.resumeCode || state.mode !== 'multi') return;
-  socket.emit('resume-room', { code: state.resumeCode, name: playerName() }, result => {
+  socket.emit('resume-room', { code: state.resumeCode }, result => {
     if (result?.error) return exitRoom(result.error.includes('移出') ? result.error : '房間已關閉，已回到首頁。');
     state.connectionLost = false; state.resumeCode = null;
     if (result.movedToSpectator) state.idleNotice = '你離線太久，已改為觀戰。';

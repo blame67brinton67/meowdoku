@@ -260,3 +260,26 @@ test('socket identity comes from the cookie and payload playerId is ignored', as
     assert.deepEqual(resumed, { ok: true, spectator: false, movedToSpectator: false });
   } finally { for (const socket of sockets) socket.disconnect(); }
 });
+
+test('a guest plays multiplayer as 神秘貓奴 and never lands on the leaderboard', async () => {
+  const { cookie, user } = await signUp('mystery_host');
+  const guest = await call('GET', '/api/auth/me');
+  // Clearing a level as a guest still unlocks the next rung, but ranks nobody.
+  await call('POST', '/api/single-complete', { body: { name: '想上榜的訪客', levelId: LEVEL.id }, cookie: guest.cookie });
+  assert.deepEqual((await call('GET', '/api/progress/me', { cookie: guest.cookie })).data.cleared, [LEVEL.id]);
+  const board = (await call('GET', '/api/leaderboard', { cookie: guest.cookie })).data;
+  assert.equal(board.me, null, 'a guest gets no rank of their own');
+  assert.ok(board.top.every(row => row.name !== '想上榜的訪客'), 'and no row either');
+
+  const hostSocket = await connectAs(cookie), guestSocket = await connectAs(guest.cookie);
+  try {
+    const { code } = await emit(hostSocket, 'create-room', { levelId: LEVEL.id, visibility: 'private' });
+    const nextState = new Promise(resolve => hostSocket.once('room-state', resolve));
+    await emit(guestSocket, 'join-room', { code, name: '我自己取的名字' });
+    const room = await nextState;
+    const named = Object.fromEntries(room.players.map(player => [player.id, player.name]));
+    assert.equal(named[user.id], 'mystery_host', 'an account plays under its own display name');
+    assert.match(named[guest.data.guest.id], /^神秘貓奴/);
+    assert.ok(!Object.values(named).includes('我自己取的名字'), 'the payload name is ignored');
+  } finally { hostSocket.disconnect(); guestSocket.disconnect(); }
+});

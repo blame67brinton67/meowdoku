@@ -25,6 +25,7 @@ const PORT = Number(process.env.PORT || 3000);
 const IDLE_GRACE = 20_000;
 const CHAT_MAX_LEN = 200, CHAT_HISTORY = 50, CHAT_WINDOW = 5_000, CHAT_WINDOW_MAX = 5, CHAT_MIN_GAP = 400;
 const ALL_SPECTATOR_CLOSE = 10 * 60_000;
+const ROOM_SWEEP_INTERVAL = 30_000, ROOM_EMPTY_GRACE = 60_000, ROOM_IDLE_CLOSE = 30 * 60_000;
 const DATA_DIR = process.env.MEOWDOKU_DATA_DIR || path.join(__dirname, 'data');
 const DB_PATH = path.join(DATA_DIR, 'meowdoku.db');
 const SESSION_COOKIE = 'meowdoku_sid';
@@ -230,9 +231,12 @@ function hintPuzzle(identity, { levelId, matchId }) {
   }
   return null;
 }
+// Only accounts are ranked: a guest has no name of their own and nothing that
+// survives the browser, so listing them would rank a throwaway identity.
 function scoreRows() {
-  const guests = Object.entries(readJson(SCORES_PATH, {})).map(([id, { name, cleared }]) => ({ key: `g:${id}`, name, cleared: cleared.length }));
-  return [...auth.userLeaderboard().map(row => ({ key: `u:${row.id}`, name: row.name, cleared: row.cleared, avatar: row.avatar || DEFAULT_AVATAR, frame: row.frame || DEFAULT_FRAME })), ...guests].sort((a, b) => b.cleared - a.cleared || a.name.localeCompare(b.name, 'zh-Hant'));
+  return auth.userLeaderboard()
+    .map(row => ({ key: `u:${row.id}`, name: row.name, cleared: row.cleared, avatar: row.avatar || DEFAULT_AVATAR, frame: row.frame || DEFAULT_FRAME }))
+    .sort((a, b) => b.cleared - a.cleared || a.name.localeCompare(b.name, 'zh-Hant'));
 }
 // Competition ranking: equal scores share a rank and the next rank skips.
 // Only accounts get a rank of their own; guests are told to sign in instead.
@@ -406,10 +410,10 @@ app.post('/api/hints', ensureIdentity, (req, res) => {
   res.json({ hint, quota: charge, charged: true });
 });
 app.post('/api/single-complete', ensureIdentity, (req, res) => {
-  const { name, levelId, ms, mistakes } = req.body || {};
+  const { levelId, ms, mistakes } = req.body || {};
   const list = singleLevels();
   const levelIndex = list.findIndex(level => level.id === levelId);
-  if (!name || levelIndex < 0) return res.status(400).json({ error: '資料不完整' });
+  if (levelIndex < 0) return res.status(400).json({ error: '資料不完整' });
   const cleared = clearedFor(req.identity);
   // Replaying something already cleared stays allowed even when a newly rated
   // level has since sorted in between it and the rung below.
@@ -423,8 +427,8 @@ app.post('/api/single-complete', ensureIdentity, (req, res) => {
     return res.json({ ok: true, cleared: auth.clearedLevels(req.identity.id).length, unlocked });
   }
   const scores = readJson(SCORES_PATH, {});
-  const entry = scores[req.identity.id] || { name: '', cleared: [] };
-  entry.name = String(name).slice(0, 20);
+  const entry = scores[req.identity.id] || { cleared: [] };
+  delete entry.name;
   if (!entry.cleared.includes(levelId)) entry.cleared.push(levelId);
   scores[req.identity.id] = entry;
   writeJson(SCORES_PATH, scores);
@@ -531,7 +535,7 @@ function compactRoom(room) {
 const ROOM_BROADCAST_INTERVAL = 50;
 function emitRoom(room) {
   clearTimeout(room.broadcastTimer); room.broadcastTimer = null;
-  room.lastBroadcast = Date.now();
+  room.lastBroadcast = room.lastActiveAt = Date.now();
   io.to(room.code).emit('room-state', compactRoom(room));
 }
 function emitRoomSoon(room) {
@@ -554,6 +558,20 @@ function closeRoom(room, reason) {
   for (const player of room.players.values()) clearTimeout(player.idleTimer);
   rooms.delete(room.code);
   if (reason) io.to(room.code).emit('room-closed', { reason });
+}
+// Every path that empties a room already closes it, but a lost 'disconnect'
+// (a phone that slept, a killed transport) would otherwise leave a room with
+// nobody in it listed forever, so a sweep reaps them on a clock as well.
+function sweepRooms(now = Date.now()) {
+  for (const room of [...rooms.values()]) {
+    const people = [...room.players.values()];
+    if (people.some(player => player.socketId)) {
+      if (now - (room.lastActiveAt || now) >= ROOM_IDLE_CLOSE) closeRoom(room, '房間閒置太久，已自動關閉');
+      continue;
+    }
+    const quietSince = Math.max(room.lastActiveAt || 0, ...people.map(player => player.disconnectedAt || 0));
+    if (now - quietSince >= ROOM_EMPTY_GRACE) closeRoom(room, null);
+  }
 }
 // The 10 minute clock only runs while nobody is actually racing.
 function checkAllSpectator(room) {
@@ -658,7 +676,7 @@ io.use((socket, next) => {
 });
 io.on('connection', socket => {
   const playerId = socket.data.identity.id, kind = socket.data.identity.kind;
-  socket.on('create-room', async ({ name, roomName, levelId, size, visibility, sprintMode, sprintSeconds, sprintFactor } = {}, callback) => {
+  socket.on('create-room', async ({ roomName, levelId, size, visibility, sprintMode, sprintSeconds, sprintFactor } = {}, callback) => {
     let puzzle;
     try { puzzle = levelId ? singleLevels().find(level => level.id === levelId) : await takeMultiplayerPuzzle(size || 7); }
     catch (error) { return callback?.({ error: error.message }); }
@@ -667,11 +685,11 @@ io.on('connection', socket => {
     const code = nanoid(5).toUpperCase();
     const room = { code, name: String(roomName || '一起玩 MeowDoku').slice(0, 40), puzzle, status: 'lobby', hostId: playerId, round: 1, leaderboard: [],
       visibility: visibility === 'private' ? 'private' : 'public',
-      players: new Map(), kicked: new Map(), stats: new Map(), password: null, startedAt: null, deadline: null, timer: null, spectatorTimer: null,
+      players: new Map(), kicked: new Map(), stats: new Map(), password: null, lastActiveAt: Date.now(), startedAt: null, deadline: null, timer: null, spectatorTimer: null,
       sprintMode: normalizeSprintMode(sprintMode, 'fixed'), sprintSeconds: clampSprintSeconds(sprintSeconds), sprintFactor: clampSprintFactor(sprintFactor), chat: [] };
-    rooms.set(code, room); joinRoom(socket, room, { name, playerId, kind, spectator: false }); callback({ code });
+    rooms.set(code, room); joinRoom(socket, room, { playerId, kind, spectator: false }); callback({ code });
   });
-  socket.on('join-room', async ({ code, name, spectator, password } = {}, callback) => {
+  socket.on('join-room', async ({ code, spectator, password } = {}, callback) => {
     const room = rooms.get(String(code || '').toUpperCase());
     if (!room) return callback({ error: '房間不存在或已關閉' });
     if (room.kicked.has(playerId)) return callback({ error: '你已被房主移出這個房間，無法再加入' });
@@ -679,7 +697,7 @@ io.on('connection', socket => {
     if (denied) return callback({ error: denied, needsPassword: true });
     if (!socket.connected || rooms.get(room.code) !== room) return callback({ error: '房間不存在或已關閉' });
     // A match's player roster locks as soon as its countdown begins.
-    joinRoom(socket, room, { name, playerId, kind, spectator: Boolean(spectator) || room.status !== 'lobby' });
+    joinRoom(socket, room, { playerId, kind, spectator: Boolean(spectator) || room.status !== 'lobby' });
     callback({ ok: true, spectator: room.status !== 'lobby' || Boolean(spectator) });
   });
   socket.on('start-game', ({ code } = {}, callback) => {
@@ -846,7 +864,7 @@ io.on('connection', socket => {
     } catch (error) { callback?.({ error: error.message }); }
     finally { room.restartPending = false; if (rooms.get(code) === room) emitRoom(room); }
   });
-  socket.on('resume-room', async ({ code, name, password } = {}, callback) => {
+  socket.on('resume-room', async ({ code, password } = {}, callback) => {
     const room = rooms.get(String(code || '').toUpperCase());
     if (!room) return callback?.({ error: '房間不存在或已關閉' });
     if (room.kicked.has(playerId)) return callback?.({ error: '你已被房主移出這個房間，無法再加入' });
@@ -856,7 +874,7 @@ io.on('connection', socket => {
       const denied = await checkRoomPassword(socket, room, password);
       if (denied) return callback?.({ error: denied, needsPassword: true });
       if (!socket.connected || rooms.get(room.code) !== room) return callback?.({ error: '房間不存在或已關閉' });
-      joinRoom(socket, room, { name, playerId, kind, spectator: true }); return callback?.({ ok: true, spectator: true, movedToSpectator: true });
+      joinRoom(socket, room, { playerId, kind, spectator: true }); return callback?.({ ok: true, spectator: true, movedToSpectator: true });
     }
     const wasIdle = player.idle;
     clearTimeout(player.idleTimer); player.idleTimer = null;
@@ -882,16 +900,31 @@ io.on('connection', socket => {
     }
   });
 });
-function joinRoom(socket, room, { name, playerId, kind, spectator }) {
+// A guest joins as an anonymous 神秘貓奴; the alias only keeps two of them
+// apart inside the room and follows the id so a reconnect reads the same.
+const GUEST_ALIASES = ['橘子', '奶油', '抹茶', '煤炭', '布丁', '芝麻', '雪球', '可可', '三花', '花生', '肉桂', '起司'];
+function guestName(room, playerId) {
+  const taken = new Set([...room.players.values()].filter(player => player.id !== playerId).map(player => player.name));
+  const offset = [...playerId].reduce((sum, char) => sum + char.charCodeAt(0), 0) % GUEST_ALIASES.length;
+  for (let step = 0; step < GUEST_ALIASES.length; step++) {
+    const candidate = `神秘貓奴・${GUEST_ALIASES[(offset + step) % GUEST_ALIASES.length]}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return '神秘貓奴';
+}
+function joinRoom(socket, room, { playerId, kind, spectator }) {
   for (const existing of room.players.values()) if (existing.id === playerId) { clearTimeout(existing.idleTimer); room.players.delete(existing.id); }
   // Looked up fresh rather than from the handshake identity, so a frame picked
   // on the profile page shows up in the next room without reconnecting.
   const user = kind === 'user' ? auth.userById(playerId) : null;
-  const player = { id: playerId, kind, name: String(name || '神秘貓奴').slice(0, 20), avatar: user?.avatar || DEFAULT_AVATAR, frame: user?.frame || DEFAULT_FRAME, spectator, socketId: socket.id, idle: false, disconnectedAt: null, idleTimer: null, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
+  const player = { id: playerId, kind, name: kind === 'user' ? String(user?.displayName || user?.username || '貓奴').slice(0, 20) : guestName(room, playerId), avatar: user?.avatar || DEFAULT_AVATAR, frame: user?.frame || DEFAULT_FRAME, spectator, socketId: socket.id, idle: false, disconnectedAt: null, idleTimer: null, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
   room.players.set(playerId, player); socket.join(room.code); socket.emit('chat-backlog', room.chat); emitRoom(room); checkAllSpectator(room);
   if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
 }
 
+// Unref'd so a test process that required this module can still exit.
+setInterval(() => sweepRooms(), ROOM_SWEEP_INTERVAL).unref();
+
 if (require.main === module) server.listen(PORT, () => { console.log(`MeowDoku is ready at http://localhost:${PORT}`); startLadder(); });
 
-module.exports = { app, server, io, db, auth, achievements, rooms, compactRoom };
+module.exports = { app, server, io, db, auth, achievements, rooms, compactRoom, sweepRooms };

@@ -145,9 +145,9 @@ button { cursor: pointer; }
 #view > * { flex: 1 1 auto; min-height: 0; }
 .brand { background: none; border: 0; font: 700 29px Fredoka, sans-serif; padding: 0; color: var(--text); }
 .brand span { color: var(--accent); font-size: 34px; }
-.player-name { display: flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: 13px; margin-left: auto; }
-.player-name input { width: 124px; border: 1px solid var(--border-soft); border-radius: 999px; padding: 7px 12px; background: rgba(var(--surface-rgb), .7); color: var(--text); transition: border-color .18s, background .18s; }
-.player-name input:hover, .player-name input:focus { border-color: var(--accent); background: var(--surface-solid); }
+.player-name { display: flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: 13px; margin-left: auto; }
+.player-name b { color: var(--text); }
+.player-name[hidden] { display: none; }
 .quiet-button, .link-button, .back-button { border: 0; background: transparent; color: var(--text); font-weight: 700; }
 .quiet-button { border: 1px solid var(--border-soft); border-radius: 999px; padding: 9px 15px; background: rgba(var(--surface-rgb), .66); transition: background .18s, border-color .18s, transform .18s; }
 .quiet-button:hover { background: var(--surface-solid); border-color: var(--accent); color: var(--accent); transform: translateY(-1px); }
@@ -304,8 +304,6 @@ dialog::backdrop { background: var(--overlay); backdrop-filter: blur(3px); anima
   .shell { width: min(100% - 20px, 1120px); }
   .topbar { min-height: 60px; }
   .brand { font-size: 24px; }
-  .player-name label { display: none; }
-  .player-name input { width: 92px; }
   .quiet-button { font-size: 12px; padding: 8px; }
   .hero { padding: 10px 8px 6px; }
   .hero-cat { display: none; }
@@ -316,7 +314,12 @@ dialog::backdrop { background: var(--overlay); backdrop-filter: blur(3px); anima
   .level-catalog { grid-template-columns: 1fr 1fr; }
   .lobby-grid { grid-template-columns: 1fr; }
   .rule-card { display: none; }
-  .game-layout, .game-layout.multi { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 8px; padding: 6px 0 14px; }
+  /* Solo is one full-height row: its rule card is hidden here, so a second
+     row would starve the board of every pixel. Multiplayer keeps an auto row
+     for the pane tabs. */
+  .game-layout, .game-layout.multi { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 6px 0 14px; }
+  .game-layout { grid-template-rows: minmax(0, 1fr); }
+  .game-layout.multi { grid-template-rows: auto minmax(0, 1fr); }
   .game-top h1 { font-size: 22px; }
   .board-wrap { padding: 6px; }
   .pane-tabs { display: flex; gap: 6px; padding: 3px; border-radius: 999px; background: var(--surface-soft); box-shadow: inset 0 0 0 1px var(--border-soft); }
