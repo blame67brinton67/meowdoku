@@ -10,7 +10,7 @@ const state = {
   mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false,
   singleStartedAt: 0, singleMistakes: 0, singleAttemptId: null,
   touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: '', pane: 'board',
-  hintQuota: null, hint: null, hintLevel: 0, hintBusy: false, hintMessage: ''
+  hintQuota: null, hint: null, hintLevel: 0, hintBusy: false, hintMessage: '', boardView: 'fastest'
 };
 const anonymousTag = localStorage.meowdokuAnonTag || String(Math.floor(Math.random() * 9000) + 1000);
 localStorage.meowdokuAnonTag = anonymousTag;
@@ -56,12 +56,20 @@ function applyTheme() {
   palette = theme.palette.slice();
   document.querySelectorAll('.cell').forEach(cell => cell.style.setProperty('--region', palette[Number(cell.dataset.region) % palette.length]));
 }
+// The selected preset is whichever theme the current colours match exactly, so
+// a single tweaked swatch reads as 自訂 without a second piece of stored state.
+const sameColor = (a, b) => a.toLowerCase() === b.toLowerCase();
+const currentPreset = () => BOARD_THEMES.find(preset => sameColor(preset.boardLine, theme.boardLine) && sameColor(preset.paper, theme.paper) && preset.palette.every((color, index) => sameColor(color, theme.palette[index]))) || null;
+function applyPreset(preset) { theme.palette = preset.palette.slice(); theme.boardLine = preset.boardLine; theme.paper = preset.paper; saveTheme(); syncThemeInputs(); applyTheme(); }
 function syncThemeInputs() {
   document.querySelectorAll('[data-theme-palette]').forEach(input => { input.value = theme.palette[Number(input.dataset.themePalette)]; });
   document.querySelector('[data-theme-key="boardLine"]').value = effectiveColor('boardLine');
   document.querySelector('[data-theme-key="paper"]').value = effectiveColor('paper');
   document.querySelector('#color-scheme').value = readColorScheme();
   syncVibrateToggle();
+  const active = currentPreset();
+  document.querySelectorAll('[data-theme-preset]').forEach(button => button.setAttribute('aria-checked', String(button.dataset.themePreset === active?.id)));
+  document.querySelector('#theme-preset-hint').textContent = active ? `目前：${active.name}。點選後仍可在下方微調單一顏色。` : '目前：自訂。點選主題會覆蓋下方的顏色。';
 }
 // Haptics: touch only, 15ms for a cat and 8ms for a cross. A drag buzzes at
 // most once per cell and never twice within 60ms.
@@ -90,6 +98,9 @@ const escapeHtml = value => String(value).replace(/[&<>'"]/g, char => ({ '&':'&a
 // wherever a level is: stars for the feel, the technique for what to look for.
 const stars = rating => '★'.repeat(rating.stars) + '☆'.repeat(5 - rating.stars);
 const ratingLine = rating => rating ? `<span class="rating"><b>${stars(rating)}</b>${escapeHtml(rating.hardestName)} · ${rating.score} 分</span>` : '';
+// Ladder rungs carry chapter/stage data; admin levels fall back to their place
+// in the sorted catalogue so both kinds read as "which level is this".
+const stageLabel = (level, fallbackIndex) => level.ladder ? `第 ${level.ladder.stage} 關 · ${escapeHtml(level.ladder.chapter)} ${level.ladder.chapterStage}/${level.ladder.chapterLength}` : `LEVEL ${String(fallbackIndex + 1).padStart(3, '0')}`;
 const playerName = () => state.name || state.user?.displayName || `神祕貓奴 #${anonymousTag}`;
 // Practice (upsolve) borrows the whole single-player board, only the scoring
 // and the wrong-click rule differ.
@@ -155,9 +166,11 @@ document.querySelector('#logout-button').addEventListener('click', async () => {
 document.querySelector('#theme-button').addEventListener('click', event => { syncThemeInputs(); openDialog(document.querySelector('#theme-dialog'), event.currentTarget); });
 document.querySelectorAll('dialog .close').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
 bindTooltips(); bindSprintDialog();
-document.querySelectorAll('[data-theme-palette]').forEach(input => input.addEventListener('input', () => { theme.palette[Number(input.dataset.themePalette)] = input.value; saveTheme(); applyTheme(); }));
-document.querySelectorAll('[data-theme-key]').forEach(input => input.addEventListener('input', () => { theme[input.dataset.themeKey] = input.value; saveTheme(); applyTheme(); }));
-document.querySelector('#reset-theme').addEventListener('click', () => { theme.palette = DEFAULT_PALETTE.slice(); theme.boardLine = DEFAULT_THEME.boardLine; theme.paper = DEFAULT_THEME.paper; saveTheme(); syncThemeInputs(); applyTheme(); });
+document.querySelector('#theme-preset-list').innerHTML = BOARD_THEMES.map(preset => `<button type="button" role="radio" aria-checked="false" data-theme-preset="${preset.id}" style="--paper-swatch:${preset.paper}"><span class="preset-swatches">${preset.palette.slice(0, 6).map(color => `<i style="background:${color}"></i>`).join('')}</span>${escapeHtml(preset.name)}</button>`).join('');
+document.querySelectorAll('[data-theme-preset]').forEach(button => button.addEventListener('click', () => applyPreset(BOARD_THEMES.find(preset => preset.id === button.dataset.themePreset))));
+document.querySelectorAll('[data-theme-palette]').forEach(input => input.addEventListener('input', () => { theme.palette[Number(input.dataset.themePalette)] = input.value; saveTheme(); syncThemeInputs(); applyTheme(); }));
+document.querySelectorAll('[data-theme-key]').forEach(input => input.addEventListener('input', () => { theme[input.dataset.themeKey] = input.value; saveTheme(); syncThemeInputs(); applyTheme(); }));
+document.querySelector('#reset-theme').addEventListener('click', () => applyPreset(DEFAULT_THEME));
 document.querySelector('#color-scheme').addEventListener('change', event => { localStorage.meowdokuColorScheme = event.target.value; applyColorScheme(); syncThemeInputs(); });
 darkQuery.addEventListener('change', () => { if (readColorScheme() === 'system') { applyColorScheme(); syncThemeInputs(); } });
 document.querySelector('#vibrate-toggle').addEventListener('click', () => { localStorage.meowdokuVibrate = vibrateEnabled() ? '0' : '1'; syncVibrateToggle(); if (vibrateEnabled()) vibrate('cat'); });
@@ -272,7 +285,7 @@ async function home() {
   state.levels = levels; state.cleared = new Set(progress.cleared);
   const nextIndex = levels.findIndex(level => !state.cleared.has(level.id));
   const nextLevel = levels[nextIndex === -1 ? levels.length - 1 : nextIndex] || null;
-  const continueLabel = !nextLevel ? '關卡正在準備' : nextIndex === -1 ? '全部通關！再玩一次' : `第 ${String(nextIndex + 1).padStart(3, '0')} 關`;
+  const continueLabel = !nextLevel ? '關卡正在準備' : nextIndex === -1 ? '全部通關！再玩一次' : stageLabel(nextLevel, nextIndex);
   view.innerHTML = `<div class="home">
     <section class="hero"><div><p class="eyebrow">A LITTLE LOGIC GAME</p><h1>幫每隻貓咪<br><em>找到牠的地盤</em></h1><p>每行、每列與每個色塊都只能住一隻貓。不要點錯，貓咪的尊嚴很脆弱。</p></div><div class="hero-cat" aria-hidden="true">=^･ω･^=</div></section>
     <section class="mode-grid"><article class="mode-card solo"><span class="mode-icon">⌁</span><p class="eyebrow">SOLO MODE</p><h2>獨自推理</h2><p>挑一個關卡，慢慢找到唯一的答案。</p><button class="primary" id="open-solo">選擇關卡</button></article>
@@ -299,7 +312,7 @@ async function showLevels() {
     // A level already cleared stays replayable even when a newly rated level
     // sorts in front of it and pushes an uncleared board in between.
     const cleared = state.cleared.has(level.id), unlocked = cleared || index === 0 || state.cleared.has(levels[index - 1].id);
-    return `<article class="catalog-card ${cleared ? 'cleared' : ''} ${unlocked ? '' : 'locked-level'}"><span>LEVEL ${String(index + 1).padStart(3, '0')}</span><h2>${escapeHtml(level.name)}</h2><p>${level.size} × ${level.size}，${level.size} 隻貓咪</p>${ratingLine(level.rating)}<button class="primary" ${unlocked ? `data-level="${level.id}"` : 'disabled'}>${cleared ? '✓ 已通過，再玩一次' : unlocked ? '開始推理' : '🔒 尚未解鎖'}</button></article>`;
+    return `<article class="catalog-card ${cleared ? 'cleared' : ''} ${unlocked ? '' : 'locked-level'}"><span>${stageLabel(level, index)}</span><h2>${escapeHtml(level.name)}</h2><p>${level.size} × ${level.size}，${level.size} 隻貓咪</p>${ratingLine(level.rating)}<button class="primary" ${unlocked ? `data-level="${level.id}"` : 'disabled'}>${cleared ? '✓ 已通過，再玩一次' : unlocked ? '開始推理' : '🔒 尚未解鎖'}</button></article>`;
   }).join('')}</section></div></div>`;
   document.querySelector('#back').onclick = home; document.querySelectorAll('[data-level]').forEach(button => button.onclick = () => startSingle(button.dataset.level));
 }
@@ -355,7 +368,7 @@ function renderGame(message = '') {
   // Portrait tabs: the lobby lives in the players pane, the match on the board.
   if (multi && room.status !== renderedLayout?.split('|')[4]) state.pane = room.status === 'lobby' ? 'players' : 'board';
   renderedLayout = layout;
-  const gameMain = `<div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div class="game-title">${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>${ratingLine(puzzle.rating)}` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div>${hint}</div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${soloMode() ? `<div class="hint-panel" id="hint-panel">${renderHintPanel()}</div>` : ''}${nextAction}</div>`;
+  const gameMain = `<div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div class="game-title">${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : puzzle.ladder ? stageLabel(puzzle) : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>${ratingLine(puzzle.rating)}` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div>${hint}</div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${soloMode() ? `<div class="hint-panel" id="hint-panel">${renderHintPanel()}</div>` : ''}${nextAction}</div>`;
   const paneTabs = `<nav class="pane-tabs" aria-label="房間分頁">${[['players', '玩家'], ['board', '棋盤'], ['chat', '聊天']].map(([pane, label]) => `<button type="button" class="pane-tab" data-pane-tab="${pane}" aria-pressed="${state.pane === pane}">${label}</button>`).join('')}</nav>`;
   view.innerHTML = multi
     ? `<section class="game-layout multi" data-pane="${state.pane}">${paneTabs}${renderRoomPanel(room, me)}${gameMain}${renderChatPanel()}</section>`
@@ -438,7 +451,13 @@ function patchGame(puzzle, room, me, isViewing, message) {
   patchBoard(viewedBoard(me, isViewing));
   if (state.mode !== 'multi') return;
   const panel = document.querySelector('.room-panel'), html = renderRoomPanel(room, me);
-  if (panel && panel.outerHTML !== html) { const sprintFocused = document.activeElement?.id === 'sprint-value'; panel.outerHTML = html; bindRoomButtons(); if (sprintFocused) { const input = document.querySelector('#sprint-value'); input?.focus(); input?.setSelectionRange(input.value.length, input.value.length); } }
+  if (panel && panel.outerHTML !== html) {
+    const sprintFocused = document.activeElement?.id === 'sprint-value', passwordFocused = document.activeElement?.id === 'room-password', typedPassword = document.querySelector('#room-password')?.value || '';
+    panel.outerHTML = html; bindRoomButtons();
+    if (sprintFocused) { const input = document.querySelector('#sprint-value'); input?.focus(); input?.setSelectionRange(input.value.length, input.value.length); }
+    const password = document.querySelector('#room-password');
+    if (password && typedPassword) { password.value = typedPassword; if (passwordFocused) { password.focus(); password.setSelectionRange(typedPassword.length, typedPassword.length); } }
+  }
 }
 function patchBoard(boardState) {
   for (const cell of document.querySelectorAll('.cell')) {
@@ -472,12 +491,19 @@ function renderRoomPanel(room, me) {
   const isHost = me?.host === true;
   const canWatch = Boolean(me?.spectator || me?.alive === false || me?.completedAt);
   const watching = room.players.find(player => player.id === state.watchingPlayerId);
-  const replay = room.status === 'finished' && isHost ? '<button class="primary wide" id="restart-room">用原房號再來一局</button>' : '';
-  const exportMap = room.status === 'finished' && room.puzzle.solution
+  const live = room.status === 'countdown' || room.status === 'playing';
+  const replay = isHost
+    ? `<button class="${room.status === 'finished' ? 'primary' : 'copy-button'} wide" id="restart-room" ${room.restartPending ? 'disabled' : ''}>${room.restartPending ? '準備中…' : room.status === 'finished' ? '用原房號再來一局' : live ? '直接重開這一局' : '換一張新地圖'}</button>${live ? '<small class="restart-hint">進行中重開會作廢本局，不計入積分與最快紀錄。</small>' : ''}`
+    : room.restartPending ? '<p class="waiting">房主正在準備新題目…</p>' : '';
+  const blocked = isHost && room.kicked?.length
+    ? `<div class="blocked-list"><p class="eyebrow">BLOCKED</p>${room.kicked.map(entry => `<p><span>${escapeHtml(entry.name)}</span><button class="link-button" data-unblock="${escapeHtml(entry.id)}">解除封鎖</button></p>`).join('')}</div>`
+    : '';
+  const knockedOut = room.status === 'playing' && me && !me.spectator && me.alive === false;
+  const exportMap = room.puzzle.solution && (room.status === 'finished' || knockedOut)
     ? '<button class="copy-button" id="copy-map">複製地圖</button><small class="map-copy-message" id="map-copy-message"></small>'
     : room.status === 'playing' ? '<small class="map-copy-hint">比賽結束後可複製地圖</small>' : '';
-  const roleToggle = room.status === 'lobby'
-    ? `<button class="role-toggle" id="role-toggle">${me?.spectator ? '加入本局，成為玩家' : '改為觀戰者'}</button>` : '';
+  const roleToggle = room.status === 'lobby' || room.status === 'finished'
+    ? `<button class="role-toggle" id="role-toggle">${me?.spectator ? (room.status === 'finished' ? '下一局加入，成為玩家' : '加入本局，成為玩家') : '改為觀戰者'}</button>` : '';
   const sprintMode = room.sprintMode === 'multiply' ? 'multiply' : 'fixed';
   const sprintValue = sprintMode === 'multiply' ? room.sprintFactor : room.sprintSeconds;
   // The summary is public to every member, so it must never carry secrets
@@ -486,10 +512,22 @@ function renderRoomPanel(room, me) {
   const sprintSetting = room.status === 'lobby'
     ? `<p class="sprint-setting readonly" data-sprint-mode="${sprintMode}" data-sprint-value="${sprintValue}"><span>最後衝刺：<b>${sprintSummary}</b></span>${isHost ? '<button type="button" class="icon-button" id="sprint-settings-button" aria-label="房間設定" aria-haspopup="dialog">⚙</button>' : ''}</p>`
     : '';
-  const leaderboard = room.leaderboard?.length
-    ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3><ol>${room.leaderboard.map(row => `<li>${avatarHtml(row.avatar, row.frame, 'small')}<strong>${escapeHtml(row.name)}</strong><span>${(row.ms / 1000).toFixed(1)}s · ${row.wins} 勝 · 第 ${row.round} 局</span></li>`).join('')}</ol></div>`
-    : '<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3><p class="empty">完成一局後，最快紀錄會出現在這裡。</p></div>';
-  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; return `<button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span>${avatarHtml(player.avatar, player.frame, 'small')}<strong>${escapeHtml(player.name)}${player.id === state.playerId ? '（你）' : ''}</strong><small class="player-progress">${status}</small></button>`; }).join('')}</div>${roleToggle}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? '<button class="primary wide" id="start-room">開始這局</button>' : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>${replay}` : ''}${leaderboard}${exportMap}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+  const sizeOptions = [4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => `<option value="${n}" ${n === room.puzzle.size ? 'selected' : ''}>${n} × ${n}</option>`).join('');
+  const roomSettings = room.status === 'lobby'
+    ? isHost
+      ? `<div class="room-settings"><label>棋盤大小<select id="room-size" ${room.restartPending ? 'disabled' : ''}>${sizeOptions}</select></label><label>房間類型<select id="room-visibility"><option value="public" ${room.visibility === 'public' ? 'selected' : ''}>公開（顯示於列表）</option><option value="private" ${room.visibility === 'private' ? 'selected' : ''}>私人（僅限房號）</option></select></label><label>房間密碼<span class="password-row"><input id="room-password" type="password" maxlength="32" autocomplete="off" placeholder="${room.hasPassword ? '已設定，輸入以替換' : '未設定'}" /><button class="copy-button" id="room-password-save">設定</button>${room.hasPassword ? '<button class="copy-button" id="room-password-clear">清除密碼</button>' : ''}</span></label><small>改大小會重新產題；密碼最長 32 字，伺服器只保存雜湊。</small></div>`
+      : `<p class="sprint-setting readonly">棋盤 <b>${room.puzzle.size} × ${room.puzzle.size}</b> · ${room.visibility === 'private' ? '私人房' : '公開房'} · ${room.hasPassword ? '🔒 需要密碼' : '無密碼'}</p>`
+    : '';
+  const streak = entry => entry.streak >= 2 ? ` <em class="streak">🔥 連霸 ${entry.streak}</em>` : '';
+  const boardTabs = `<div class="board-tabs"><button class="link-button ${state.boardView === 'fastest' ? 'active' : ''}" data-board-view="fastest">最快紀錄</button><button class="link-button ${state.boardView === 'points' ? 'active' : ''}" data-board-view="points">積分榜</button></div>`;
+  const leaderboard = state.boardView === 'points'
+    ? room.stats?.length
+      ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間積分榜</h3>${boardTabs}<ol>${room.stats.map(row => `<li>${avatarHtml(row.avatar, row.frame, 'small')}<strong>${escapeHtml(row.name)}${streak(row)}</strong><span>${row.points} 分 · 完成 ${row.completed} / ${row.played} 局${row.averageMs != null ? ` · 平均 ${(row.averageMs / 1000).toFixed(1)}s` : ''}${row.bestStreak >= 2 ? ` · 最長連霸 ${row.bestStreak}` : ''}</span></li>`).join('')}</ol><small class="points-rule">完成得 N − 名次 + 1 分（N 為該局玩家數），未完成 0 分。</small></div>`
+      : `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間積分榜</h3>${boardTabs}<p class="empty">每局結束後累計積分：完成得 N − 名次 + 1 分，未完成 0 分。</p></div>`
+    : room.leaderboard?.length
+      ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3>${boardTabs}<ol>${room.leaderboard.map(row => `<li>${avatarHtml(row.avatar, row.frame, 'small')}<strong>${escapeHtml(row.name)}</strong><span>${(row.ms / 1000).toFixed(1)}s · ${row.wins} 勝 · 第 ${row.round} 局</span></li>`).join('')}</ol></div>`
+      : `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3>${boardTabs}<p class="empty">完成一局後，最快紀錄會出現在這裡。</p></div>`;
+  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; const stat = room.stats?.find(entry => entry.playerId === player.id); const kick = isHost && player.id !== state.playerId ? `<button class="kick-button" data-kick="${escapeHtml(player.id)}" title="移出房間" aria-label="移出 ${escapeHtml(player.name)}">移出</button>` : ''; return `<div class="person-row"><button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span>${avatarHtml(player.avatar, player.frame, 'small')}<strong>${escapeHtml(player.name)}${player.id === state.playerId ? '（你）' : ''}${stat ? streak(stat) : ''}</strong><small class="player-progress">${status}${stat ? ` · ${stat.points} 分` : ''}</small></button>${kick}</div>`; }).join('')}</div>${roleToggle}${roomSettings}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? `<button class="primary wide" id="start-room" ${room.restartPending ? 'disabled' : ''}>開始這局</button>` : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>` : ''}${replay}${blocked}${leaderboard}${exportMap}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
 }
 function renderChatPanel() {
   return `<aside class="chat-panel"><div><p class="eyebrow">ROOM CHAT</p><h2>房間聊天</h2></div><div class="chat-log" id="chat-log"></div><form class="chat-form" id="chat-form"><textarea id="chat-input" rows="1" maxlength="200" placeholder="跟大家說點什麼…"></textarea><button class="primary" type="submit">送出</button></form><small class="chat-notice" id="chat-notice"></small></aside>`;
@@ -518,7 +556,8 @@ function sendChat() {
 function formatPuzzleText(puzzle) {
   const rows = [];
   for (let row = 0; row < puzzle.size; row++) rows.push(puzzle.regions.slice(row * puzzle.size, (row + 1) * puzzle.size).map(region => region + 1).join(' '));
-  rows.push(puzzle.solution.map(cat => cat.col + 1).join(' '));
+  // Answer row is base64 so a glance at shared text does not spoil the fun; parseBoardText accepts both forms.
+  rows.push('# 下一行是 base64 編碼的答案，避免不小心瞄到；匯入時原樣貼上即可。', 'answer:' + btoa(puzzle.solution.map(cat => cat.col + 1).join(' ')));
   return rows.join('\n');
 }
 async function copyText(text) {
@@ -645,21 +684,43 @@ async function showMultiplayer() {
   const publicRooms = await api('/api/public-rooms');
   state.mode = 'multiplayer';
   const roomList = publicRooms.length
-    ? publicRooms.map(room => `<button class="public-room" data-public-room="${room.code}"><span class="public-room-icon">${room.status === 'lobby' ? '♟' : '◉'}</span><span><strong>${escapeHtml(room.name)}</strong><small>${room.size} × ${room.size} · ${room.players} 位玩家${room.spectators ? ` · ${room.spectators} 位觀戰` : ''}</small></span><b>${room.status === 'lobby' ? '快速加入 →' : '觀戰 →'}</b></button>`).join('')
+    ? publicRooms.map(room => `<button class="public-room" data-public-room="${room.code}"><span class="public-room-icon">${room.status === 'lobby' ? '♟' : '◉'}</span><span><strong>${escapeHtml(room.name)}${room.hasPassword ? ' 🔒' : ''}</strong><small>${room.size} × ${room.size} · ${room.players} 位玩家${room.spectators ? ` · ${room.spectators} 位觀戰` : ''}</small></span><b>${room.status === 'lobby' ? '快速加入 →' : '觀戰 →'}</b></button>`).join('')
     : '<p class="empty public-empty">目前沒有公開房間。開一間讓大家加入吧！</p>';
   view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><div class="page-body"><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label><label>最後衝刺秒數<input name="sprintSeconds" type="text" inputmode="numeric" maxlength="4" value="60" /></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section></div></div>`;
   document.querySelector('#back').onclick = home;
   document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target), button = event.target.querySelector('button[type="submit"], button'), label = button.textContent; button.disabled = true; button.textContent = '建立中…'; socket.emit('create-room', { name: playerName(), roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); };
-  document.querySelector('#join-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target); socket.emit('join-room', { code: form.get('code'), name: playerName(), spectator: form.has('spectator') }, result => { if (result.error) alert(result.error); }); };
+  document.querySelector('#join-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target); joinRoom({ code: form.get('code'), spectator: form.has('spectator') }); };
   document.querySelector('#refresh-rooms').onclick = showMultiplayer;
-  document.querySelectorAll('[data-public-room]').forEach(button => button.addEventListener('click', () => socket.emit('join-room', { code: button.dataset.publicRoom, name: playerName(), spectator: false }, result => { if (result.error) alert(result.error); })));
+  document.querySelectorAll('[data-public-room]').forEach(button => button.addEventListener('click', () => joinRoom({ code: button.dataset.publicRoom, spectator: false })));
+}
+// A locked room is only discovered on the first refusal, then asked for once.
+function joinRoom({ code, spectator }, password) {
+  socket.emit('join-room', { code, name: playerName(), spectator, password }, result => {
+    if (!result.error) return;
+    if (result.needsPassword && password === undefined) { const entered = prompt('這間房需要密碼，請輸入：'); if (entered !== null) return joinRoom({ code, spectator }, entered); return; }
+    alert(result.error);
+  });
 }
 function bindRoomButtons() {
   document.querySelector('#start-room')?.addEventListener('click', () => socket.emit('start-game', { code: state.room.code }, result => result?.error && alert(result.error)));
   document.querySelector('#copy-room')?.addEventListener('click', async () => { await navigator.clipboard.writeText(state.room.code); const button = document.querySelector('#copy-room'); button.textContent = '已複製！'; setTimeout(() => button.textContent = `複製房間碼 ${state.room.code}`, 1200); });
   document.querySelector('#copy-map')?.addEventListener('click', async event => { const button = event.currentTarget, message = document.querySelector('#map-copy-message'), copied = await copyText(formatPuzzleText(state.room.puzzle)); button.textContent = copied ? '已複製地圖！' : '複製失敗'; if (message) message.textContent = copied ? '' : '複製失敗，請手動複製地圖。'; if (copied) setTimeout(() => { if (button.isConnected) button.textContent = '複製地圖'; }, 1200); });
   document.querySelectorAll('[data-watch]').forEach(button => button.addEventListener('click', () => { state.watchingPlayerId = button.dataset.watch; renderGame(); }));
-  document.querySelector('#restart-room')?.addEventListener('click', event => { const button = event.currentTarget, label = button.textContent; button.disabled = true; button.textContent = '準備中…'; socket.emit('restart-room', { code: state.room.code }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); });
+  document.querySelector('#restart-room')?.addEventListener('click', event => {
+    const button = event.currentTarget, live = state.room.status === 'countdown' || state.room.status === 'playing';
+    if (live && !confirm('確定要重開這一局？本局成績將作廢，不計入積分與最快紀錄。')) return;
+    button.disabled = true; button.textContent = '準備中…';
+    socket.emit('restart-room', { code: state.room.code, }, result => { if (result?.error) alert(result.error); renderGame(); });
+  });
+  document.querySelectorAll('[data-kick]').forEach(button => button.addEventListener('click', () => { const target = state.room.players.find(player => player.id === button.dataset.kick); if (!confirm(`要把 ${target?.name || '這位成員'} 移出房間嗎？他將無法再加入，除非你解除封鎖。`)) return; socket.emit('kick-player', { code: state.room.code, targetId: button.dataset.kick }, result => result?.error && alert(result.error)); }));
+  document.querySelectorAll('[data-unblock]').forEach(button => button.addEventListener('click', () => socket.emit('unblock-player', { code: state.room.code, targetId: button.dataset.unblock }, result => result?.error && alert(result.error))));
+  const updateSettings = (payload, done) => socket.emit('update-room-settings', { code: state.room.code, ...payload }, result => { if (result?.error) alert(result.error); done?.(result); });
+  document.querySelector('#room-size')?.addEventListener('change', event => { event.target.disabled = true; updateSettings({ size: event.target.value }, () => renderGame()); });
+  document.querySelector('#room-visibility')?.addEventListener('change', event => updateSettings({ visibility: event.target.value }, () => renderGame()));
+  document.querySelector('#room-password-save')?.addEventListener('click', () => { const input = document.querySelector('#room-password'); updateSettings({ password: input.value }, result => { if (result?.ok) input.value = ''; }); });
+  document.querySelector('#room-password-clear')?.addEventListener('click', () => updateSettings({ clearPassword: true }));
+  document.querySelector('#room-password')?.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); document.querySelector('#room-password-save')?.click(); } });
+  document.querySelectorAll('[data-board-view]').forEach(button => button.addEventListener('click', () => { state.boardView = button.dataset.boardView; renderGame(); }));
   document.querySelector('#role-toggle')?.addEventListener('click', () => socket.emit('set-lobby-role', { code: state.room.code, spectator: !state.room.players.find(player => player.id === state.playerId)?.spectator }, result => result?.error && alert(result.error)));
   document.querySelector('#sprint-settings-button')?.addEventListener('click', event => openDialog(document.querySelector('#sprint-dialog'), event.currentTarget));
   syncSprintDialog();
@@ -742,13 +803,16 @@ socket.on('disconnect', () => {
 socket.on('connect', () => {
   if (!state.resumeCode || state.mode !== 'multi') return;
   socket.emit('resume-room', { code: state.resumeCode, name: playerName() }, result => {
-    if (result?.error) return exitRoom('房間已關閉，已回到首頁。');
+    if (result?.error) return exitRoom(result.error.includes('移出') ? result.error : '房間已關閉，已回到首頁。');
     state.connectionLost = false; state.resumeCode = null;
     if (result.movedToSpectator) state.idleNotice = '你離線太久，已改為觀戰。';
     renderGame();
   });
 });
 socket.on('room-closed', ({ reason }) => exitRoom(reason));
+socket.on('kicked', ({ code, reason }) => { if (state.room && code !== state.room.code) return; document.querySelector('#finish-notice')?.remove(); exitRoom(reason || '你已被房主移出房間'); });
+// The abandoned round leaves no trace on the board or in the results panel.
+socket.on('room-restarted', ({ message }) => { state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); window.lastResults = null; document.querySelector('#finish-notice')?.remove(); if (state.room) { state.room.deadline = null; renderGame(message); } });
 // A rejected handshake means the cookie went stale; a fresh /me mints one.
 socket.on('connect_error', async () => { try { await loadIdentity(); } catch {} });
 document.addEventListener('visibilitychange', () => {

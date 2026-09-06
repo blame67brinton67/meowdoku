@@ -21,17 +21,19 @@ const FIRST_TARGET = 22, LAST_TARGET = 230;
 function triesPerRound(size) {
   return size <= 8 ? 150 : size <= 10 ? 40 : 15;
 }
-const FLAVOURS = ['曬太陽的午後', '滾來滾去的毛球', '謎樣的貓腳印', '深夜的貓步', '傳說中的貓王'];
 // Chapters slice the ladder by position; each chapter also fixes the board
-// sizes its rungs are drawn from.
+// sizes its rungs are drawn from and the mood of its rung titles. Every
+// adjective appears once across the ladder, so the 48 titles are distinct
+// however the nouns rotate.
 const CHAPTERS = [
-  { id: 'kitten', name: '新手貓窩', until: 0.12, sizes: [5, 6] },
-  { id: 'alley', name: '巷口探險', until: 0.3, sizes: [6, 7] },
-  { id: 'rooftop', name: '屋頂漫步', until: 0.5, sizes: [7, 8] },
-  { id: 'midnight', name: '深夜貓步', until: 0.7, sizes: [8, 9] },
-  { id: 'trial', name: '貓王試煉', until: 0.85, sizes: [9, 10] },
-  { id: 'legend', name: '傳說貓王', until: Infinity, sizes: [11, 12] }
+  { id: 'kitten', name: '新手貓窩', until: 0.12, sizes: [5, 6], adjectives: ['曬太陽的', '打呵欠的', '軟綿綿的', '愛撒嬌的', '踩奶的', '翻肚肚的'] },
+  { id: 'alley', name: '巷口探險', until: 0.3, sizes: [6, 7], adjectives: ['好奇的', '躡手躡腳的', '追蝴蝶的', '躲貓貓的', '踩水窪的', '爬樹的', '偷魚乾的', '拆紙箱的', '半夢半醒的'] },
+  { id: 'rooftop', name: '屋頂漫步', until: 0.5, sizes: [7, 8], adjectives: ['走鋼索的', '看星星的', '跳簷角的', '追月光的', '迎風的', '踏瓦片的', '盯著烏鴉的', '穿過煙囪的', '呼嚕嚕的'] },
+  { id: 'midnight', name: '深夜貓步', until: 0.7, sizes: [8, 9], adjectives: ['謎樣的', '低吼的', '瞇著眼的', '弓起背的', '豎起毛的', '狩獵的', '潛伏的', '閃著綠眼的', '無聲無息的'] },
+  { id: 'trial', name: '貓王試煉', until: 0.85, sizes: [9, 10], adjectives: ['閃電般的', '怒吼的', '不服輸的', '撲上來的', '狂奔的', '亮爪的', '無所畏懼的'] },
+  { id: 'legend', name: '傳說貓王', until: Infinity, sizes: [11, 12], adjectives: ['傳說中的', '戴王冠的', '威震四方的', '睥睨眾生的', '無人能敵的', '千年一遇的', '掌管宇宙的', '終極的'] }
 ];
+const NOUNS = ['橘貓', '毛球', '窗台', '紙箱', '魚乾', '腳印', '屋頂', '罐罐'];
 const fractionOf = index => LADDER_LENGTH > 1 ? index / (LADDER_LENGTH - 1) : 0;
 function chapterOf(index) {
   const fraction = fractionOf(index);
@@ -63,18 +65,29 @@ function ratingOf(puzzle) {
   const rating = rate(puzzle);
   return { score: rating.score, stars: rating.stars, hardest: rating.hardest, hardestName: rating.hardestName, counts: rating.counts, steps: rating.steps };
 }
-function ladderName(index, rating) {
-  return `第 ${String(index + 1).padStart(3, '0')} 階 · ${FLAVOURS[Math.min(FLAVOURS.length, rating.stars) - 1]}`;
+// Purely a function of the rung index, so a rebooted server (and a renamed
+// stored ladder) always lands on the same titles. The noun offset skews by
+// chapter so the same noun never opens two chapters in a row.
+function ladderTitle(index) {
+  const chapter = chapterOf(index), chapterIndex = CHAPTERS.indexOf(chapter);
+  const rungs = Array.from({ length: LADDER_LENGTH }, (_, i) => i).filter(i => chapterOf(i) === chapter);
+  const stageInChapter = rungs.indexOf(index);
+  const noun = NOUNS[(stageInChapter + chapterIndex * 3) % NOUNS.length];
+  return {
+    name: `${chapter.adjectives[stageInChapter]}${noun}`,
+    ladder: { stage: index + 1, chapter: chapter.name, chapterIndex: chapterIndex + 1, chapterStage: stageInChapter + 1, chapterLength: rungs.length }
+  };
 }
 // A stored ladder is only trusted when it was built by this version and every
-// rung still carries a rating; anything else is rebuilt from scratch.
+// rung still carries a rating; anything else is rebuilt from scratch. Titles
+// are re-derived on load, so renaming never touches ids, boards or ratings.
 function validLadder(stored) {
   if (!stored || stored.version !== LADDER_VERSION || !Array.isArray(stored.levels)) return [];
   const levels = [];
   for (const level of stored.levels) {
     if (!level?.id || !Array.isArray(level.regions) || !Array.isArray(level.solution) || !level.rating || level.regions.length !== level.size * level.size) break;
     if (levels.length && level.rating.score <= levels[levels.length - 1].rating.score) break;
-    levels.push(level);
+    levels.push({ ...level, ...ladderTitle(Number.isInteger(level.ladderIndex) ? level.ladderIndex : levels.length) });
   }
   return levels;
 }
@@ -86,7 +99,7 @@ function buildLadder({ levels, generate, makeId, paused, onAccepted, onDone, onP
   let previous = levels.length ? levels[levels.length - 1].rating.score : 0;
   let round = 0, tries = 0, best = null;
   const accept = (puzzle, rating) => {
-    const level = { id: makeId(), name: ladderName(index, rating), createdAt: Date.now(), ladderIndex: index, rating, ...puzzle };
+    const level = { id: makeId(), ...ladderTitle(index), createdAt: Date.now(), ladderIndex: index, rating, ...puzzle };
     levels.push(level); previous = rating.score; index++; round = 0; tries = 0; best = null;
     onAccepted?.(level);
     setImmediate(tick);
@@ -116,4 +129,4 @@ function buildLadder({ levels, generate, makeId, paused, onAccepted, onDone, onP
   setImmediate(tick);
 }
 
-module.exports = { buildLadder, validLadder, ratingOf, rung, chapterOf, ladderChapters, CHAPTERS, LADDER_VERSION, LADDER_LENGTH };
+module.exports = { buildLadder, validLadder, ratingOf, rung, chapterOf, ladderChapters, ladderTitle, CHAPTERS, LADDER_VERSION, LADDER_LENGTH };

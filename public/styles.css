@@ -235,7 +235,7 @@ button { cursor: pointer; }
 .rule-card, .room-panel { background: var(--surface-cream); padding: 22px; border-radius: var(--radius); box-shadow: var(--shadow); overflow-y: auto; }
 .rule-card ul { margin: 14px 0 0; padding-left: 19px; line-height: 1.9; font-size: 14px; }
 .room-panel { display: flex; flex-direction: column; gap: 0; background: linear-gradient(170deg, var(--surface-mint-from), var(--surface-mint-to)); }
-.people { flex: 0 1 auto; min-height: 96px; max-height: 42%; overflow-y: auto; margin: 10px 0; }
+.people { flex: 0 1 auto; min-height: 132px; max-height: 42%; overflow-y: auto; margin: 10px 0; }
 .person { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--divider); border-radius: 10px; font-size: 14px; transition: background .18s; }
 .person:not(:disabled):hover { background: rgba(var(--surface-rgb), .8); }
 .person > span { color: var(--accent); }
