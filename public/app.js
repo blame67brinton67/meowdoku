@@ -5,7 +5,7 @@ const socket = io({ autoConnect: false });
 const state = {
   // Server-issued identity; the id is what rooms and records are keyed by.
   playerId: null, user: null, guest: null,
-  mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false,
+  mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false, dragPoint: null,
   singleStartedAt: 0, singleMistakes: 0, singleAttemptId: null,
   touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: '', pane: 'board',
   hintQuota: null, hint: null, hintLevel: 0, hintBusy: false, hintMessage: '', boardView: 'fastest'
@@ -695,7 +695,9 @@ function bindBoard() {
       if (event.button !== 2 || cell.closest('.locked')) return;
       event.preventDefault();
       const key = `${cell.dataset.row}:${cell.dataset.col}`;
-      state.dragged = true; state.dragMarking = !state.marks.has(key); applyMark(cell, state.dragMarking);
+      state.dragged = true; state.dragMarking = !state.marks.has(key);
+      state.dragPoint = { x: event.clientX, y: event.clientY };
+      applyMark(cell, state.dragMarking);
     });
     cell.addEventListener('pointerdown', event => {
       if (event.pointerType !== 'touch' || cell.closest('.locked')) return;
@@ -711,21 +713,45 @@ function bindBoard() {
   });
   document.onpointermove = event => {
     if (!state.dragged) return;
-    const cell = document.elementFromPoint(event.clientX, event.clientY)?.closest('.cell');
-    if (cell && !cell.closest('.locked')) applyMark(cell, state.dragMarking, event.pointerType === 'touch');
+    const touch = event.pointerType === 'touch';
+    for (const point of dragSamples(event)) {
+      const cell = document.elementFromPoint(point.x, point.y)?.closest('.cell');
+      if (cell && !cell.closest('.locked')) applyMark(cell, state.dragMarking, touch);
+      state.dragPoint = point;
+    }
   };
   const endPointer = event => {
     if (event.pointerType === 'touch' && event.pointerId === state.touchPointerId) state.touchPointerId = null;
-    clearTimeout(state.touchTimer); state.touchTimer = null; state.dragged = false;
+    clearTimeout(state.touchTimer); state.touchTimer = null; state.dragged = false; state.dragPoint = null;
   };
   document.onpointerup = endPointer;
   document.onpointercancel = endPointer;
+}
+// A quick flick reports one move event several cells further along, so the
+// straight line between two samples is walked instead of only its endpoint —
+// otherwise the cells in between are never crossed.
+function dragSamples(event) {
+  const points = [];
+  const step = Math.max((document.querySelector('.cell')?.getBoundingClientRect().width || 24) / 2, 1);
+  let from = state.dragPoint;
+  const coalesced = event.getCoalescedEvents?.() || [];
+  const samples = coalesced.length ? coalesced : [event];
+  for (const sample of samples) {
+    const to = { x: sample.clientX, y: sample.clientY };
+    const steps = from ? Math.min(Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / step), 400) : 0;
+    for (let i = 1; i < steps; i++) points.push({ x: from.x + (to.x - from.x) * i / steps, y: from.y + (to.y - from.y) * i / steps });
+    points.push(to); from = to;
+  }
+  return points;
 }
 function beginTouchMark(cell) {
   if (state.dragged || cell.closest('.locked')) return;
   const key = `${cell.dataset.row}:${cell.dataset.col}`;
   state.dragged = true; state.dragMarking = !state.marks.has(key); state.suppressClickUntil = Date.now() + 700;
-  haptics.keys.clear(); applyMark(cell, state.dragMarking, true);
+  haptics.keys.clear();
+  const box = cell.getBoundingClientRect();
+  state.dragPoint = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+  applyMark(cell, state.dragMarking, true);
 }
 function applyMark(cell, shouldMark, touch = false) {
   if (cell.classList.contains('cat') || cell.classList.contains('wrong')) return;
