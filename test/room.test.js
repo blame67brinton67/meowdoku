@@ -364,13 +364,11 @@ test('the sweep reaps a room nobody is connected to, and leaves a live one alone
   sweepRooms();
   assert.equal(room(code), undefined, 'a room with nobody connected is closed');
 
-  // A room that is still connected but untouched for half an hour also goes.
+  // Someone sitting in a room all day is not a reason to close it.
   const idle = await makeRoom(['idler']);
-  room(idle.code).lastActiveAt = Date.now() - 31 * 60_000;
-  const closed = once(idle.sockets[0], 'room-closed');
+  room(idle.code).lastActiveAt = Date.now() - 24 * 60 * 60_000;
   sweepRooms();
-  assert.equal((await closed).reason, '房間閒置太久，已自動關閉');
-  assert.equal(room(idle.code), undefined);
+  assert.ok(room(idle.code), 'an idle room with someone connected stays open');
   for (const socket of [...sockets, ...idle.sockets]) socket.disconnect();
 });
 
@@ -381,4 +379,17 @@ test('deep links to a page are served the app, unknown paths are not', async () 
     assert.match(await response.text(), /<div id="view">|id="view"/);
   }
   assert.equal((await fetch(`${url}/nope/nope`)).status, 404);
+});
+
+test('a public room stays in the listing after its round finishes', async () => {
+  const { code, sockets: [a], ids: [aId] } = await makeRoom(['a']);
+  const listed = async () => (await fetch(`${url}/api/public-rooms`).then(r => r.json())).find(r => r.code === code);
+  assert.equal((await listed()).status, 'lobby');
+  await startMatch(code, a, aId);
+  const done = finished(a);
+  await solve(code, a, aId);
+  await done;
+  assert.equal(room(code).status, 'finished');
+  assert.equal((await listed()).status, 'finished', 'the next round happens in this room, so it stays visible');
+  a.disconnect();
 });

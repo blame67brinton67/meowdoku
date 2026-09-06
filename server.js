@@ -25,7 +25,7 @@ const PORT = Number(process.env.PORT || 3000);
 const IDLE_GRACE = 20_000;
 const CHAT_MAX_LEN = 200, CHAT_HISTORY = 50, CHAT_WINDOW = 5_000, CHAT_WINDOW_MAX = 5, CHAT_MIN_GAP = 400;
 const ALL_SPECTATOR_CLOSE = 10 * 60_000;
-const ROOM_SWEEP_INTERVAL = 30_000, ROOM_EMPTY_GRACE = 60_000, ROOM_IDLE_CLOSE = 30 * 60_000;
+const ROOM_SWEEP_INTERVAL = 30_000, ROOM_EMPTY_GRACE = 60_000;
 const DATA_DIR = process.env.MEOWDOKU_DATA_DIR || path.join(__dirname, 'data');
 const DB_PATH = path.join(DATA_DIR, 'meowdoku.db');
 const SESSION_COOKIE = 'meowdoku_sid';
@@ -312,7 +312,8 @@ app.get('/api/levels/:id', (req, res) => {
 app.get('/api/leaderboard', (req, res) => res.json(leaderboardFor(req.identity)));
 app.get('/api/public-rooms', (_req, res) => {
   const visibleRooms = [...rooms.values()]
-    .filter(room => room.visibility === 'public' && room.status !== 'finished')
+    // A finished room stays listed: it is where the next round happens.
+    .filter(room => room.visibility === 'public')
     .map(room => ({
       code: room.code, name: room.name, size: room.puzzle.size, status: room.status, hasPassword: Boolean(room.password),
       players: [...room.players.values()].filter(player => !player.spectator).length,
@@ -581,10 +582,8 @@ function closeRoom(room, reason) {
 function sweepRooms(now = Date.now()) {
   for (const room of [...rooms.values()]) {
     const people = [...room.players.values()];
-    if (people.some(player => player.socketId)) {
-      if (now - (room.lastActiveAt || now) >= ROOM_IDLE_CLOSE) closeRoom(room, '房間閒置太久，已自動關閉');
-      continue;
-    }
+    // A room with anybody connected stays open however long they idle there.
+    if (people.some(player => player.socketId)) continue;
     const quietSince = Math.max(room.lastActiveAt || 0, ...people.map(player => player.disconnectedAt || 0));
     if (now - quietSince >= ROOM_EMPTY_GRACE) closeRoom(room, null);
   }

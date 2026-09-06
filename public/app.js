@@ -353,7 +353,8 @@ document.querySelector('#save-order').addEventListener('click', async () => {
 
 async function home() {
   navigate('/');
-  state.mode = 'home'; state.single = null; state.room = null; state.practice = null; state.cats.clear(); state.marks.clear();
+  dropRoom();
+  state.mode = 'home'; state.single = null; state.practice = null; state.cats.clear(); state.marks.clear();
   const [levels, leaderboard, progress] = await Promise.all([api('/api/levels'), api('/api/leaderboard'), api('/api/progress/me')]);
   state.levels = levels; state.cleared = new Set(progress.cleared);
   const nextIndex = levels.findIndex(level => !state.cleared.has(level.id));
@@ -392,7 +393,7 @@ function myRankLine(leaderboard) {
 }
 async function showLevels() {
   const [levels, progress] = await Promise.all([api('/api/levels'), api('/api/progress/me')]);
-  state.levels = levels; state.cleared = new Set(progress.cleared); state.mode = 'levels';
+  dropRoom(); state.levels = levels; state.cleared = new Set(progress.cleared); state.mode = 'levels';
   const clearedCount = levels.filter(level => state.cleared.has(level.id)).length;
   view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">SOLO MODE</p><h1>一步一腳印解鎖</h1><p>已通過 <b>${clearedCount}</b> / ${levels.length} 關。關卡依難度排序，完成前一關才能打開下一盒罐罐。</p></section><div class="page-body">${levels.length ? '' : '<section class="panel"><p class="empty">難度階梯正在產生，稍等幾秒再重新整理。</p></section>'}<section class="level-catalog">${levels.map((level, index) => {
     // A level already cleared stays replayable even when a newly rated level
@@ -407,7 +408,7 @@ async function startSingle(id) {
   if (!state.levels.length) state.levels = await api('/api/levels');
   try { state.single = await api(`/api/levels/${id}`); }
   catch { return home(); }
-  state.mode = 'single'; state.singleCompleted = false; state.nextSingleId = null;
+  dropRoom(); state.mode = 'single'; state.singleCompleted = false; state.nextSingleId = null;
   // Mistakes accumulate across retries of the same level until it is cleared.
   if (state.singleAttemptId !== id) { state.singleAttemptId = id; state.singleMistakes = 0; }
   state.singleStartedAt = Date.now();
@@ -415,14 +416,14 @@ async function startSingle(id) {
 }
 async function showHistory() {
   const records = await api('/api/history/me');
-  state.mode = 'history'; state.room = null; state.practice = null;
+  dropRoom(); state.mode = 'history'; state.practice = null;
   view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MATCH HISTORY</p><h1>對戰紀錄</h1><p>點選任一場對戰，重新打開那張地圖慢慢解。練習不計入單人進度與排行榜。</p></section><div class="page-body"><section class="level-catalog">${records.length ? records.map(record => `<article class="catalog-card"><span>${escapeHtml(matchDate(record.finishedAt))} · ROOM ${escapeHtml(record.code)}</span><h2>${escapeHtml(record.roomName)}</h2><p>${record.size} × ${record.size}，你：${escapeHtml(outcomeLabel(record.outcome))}；冠軍：${record.results[0] ? `${escapeHtml(record.results[0].name)} ${record.results[0].time}s` : '無人完成'}</p><button class="primary" data-match="${escapeHtml(record.matchId)}">重新解這張圖</button></article>`).join('') : '<p class="empty">還沒有對戰紀錄。去多人房間跑一場，這裡就會留下地圖。</p>'}</section></div></div>`;
   document.querySelector('#back').onclick = home;
   document.querySelectorAll('[data-match]').forEach(button => button.onclick = () => startPractice(records.find(record => record.matchId === button.dataset.match)));
 }
 function startPractice(record) {
   if (!record) return;
-  state.practice = record; state.mode = 'practice'; state.singleCompleted = false; state.practiceMs = null; state.practiceStartedAt = Date.now();
+  dropRoom(); state.practice = record; state.mode = 'practice'; state.singleCompleted = false; state.practiceMs = null; state.practiceStartedAt = Date.now();
   state.single = { id: record.matchId, name: record.roomName, size: record.size, regions: record.regions, solution: record.solution };
   resetBoard(); renderGame(); loadHintQuota();
 }
@@ -786,9 +787,9 @@ async function chooseCell(cell, touch = false) {
 
 async function showMultiplayer() {
   const publicRooms = await api('/api/public-rooms');
-  state.mode = 'multiplayer';
+  dropRoom(); state.mode = 'multiplayer';
   const roomList = publicRooms.length
-    ? publicRooms.map(room => `<button class="public-room" data-public-room="${room.code}"><span class="public-room-icon">${room.status === 'lobby' ? '♟' : '◉'}</span><span><strong>${escapeHtml(room.name)}${room.hasPassword ? ' 🔒' : ''}</strong><small>${room.size} × ${room.size} · ${room.players} 位玩家${room.spectators ? ` · ${room.spectators} 位觀戰` : ''}</small></span><b>${room.status === 'lobby' ? '快速加入 →' : '觀戰 →'}</b></button>`).join('')
+    ? publicRooms.map(room => `<button class="public-room" data-public-room="${room.code}"><span class="public-room-icon">${room.status === 'lobby' ? '♟' : '◉'}</span><span><strong>${escapeHtml(room.name)}${room.hasPassword ? ' 🔒' : ''}</strong><small>${room.size} × ${room.size} · ${room.players} 位玩家${room.spectators ? ` · ${room.spectators} 位觀戰` : ''}</small></span><b>${room.status === 'lobby' ? '快速加入 →' : room.status === 'finished' ? '加入下一局 →' : '觀戰 →'}</b></button>`).join('')
     : '<p class="empty public-empty">目前沒有公開房間。開一間讓大家加入吧！</p>';
   view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><div class="page-body"><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label><label>最後衝刺秒數<input name="sprintSeconds" type="text" inputmode="numeric" maxlength="4" value="60" /></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section></div></div>`;
   document.querySelector('#back').onclick = home;
@@ -901,6 +902,13 @@ function exitRoom(message) {
   home();
   if (message) alert(message);
 }
+// Leaving the room's page leaves the room itself; otherwise the server keeps
+// counting you as present and keeps broadcasting to a page that moved on.
+function dropRoom() {
+  if (!state.room) return;
+  socket.emit('leave-room', { code: state.room.code });
+  state.room = null; state.resumeCode = null; state.watchingPlayerId = null; state.chat = [];
+}
 function leaveRoom() {
   state.resumeCode = null;
   const quit = () => { socket.disconnect(); window.location.assign('/'); };
@@ -910,6 +918,9 @@ function leaveRoom() {
 }
 
 socket.on('room-state', room => {
+  // Reading a profile or a level list is not an invitation to be dragged back
+  // into the room, so a broadcast only paints when the room is the open page.
+  if (state.mode !== 'multi' && currentRoute().name !== 'multi') return;
   state.room = room; state.mode = 'multi';
   navigate(`/multi/${room.code}`, { replace: currentRoute().name === 'multi' });
   const me = room.players.find(player => player.id === state.playerId);
@@ -1012,8 +1023,6 @@ function applyRoute() {
     if (state.room?.code === param) return renderGame();
     return joinRoom({ code: param, spectator: false });
   }
-  // Walking back out of a room means leaving it, not just repainting.
-  if (state.room) return leaveRoom();
   return home();
 }
 window.addEventListener('popstate', () => applyRoute());
@@ -1026,7 +1035,8 @@ if (/^#\/u\//.test(location.hash)) {
 async function showProfile(username = null) {
   const own = !username || username === state.user?.username;
   navigate(username ? `/profile/${username}` : state.user ? `/profile/${state.user.username}` : '/profile');
-  state.mode = 'profile'; state.room = null; state.practice = null;
+  dropRoom();
+  state.mode = 'profile'; state.practice = null;
   const back = '<button class="back-button" id="back">← 首頁</button>';
   if (!own) return showPublicProfile(username, back);
   if (!state.user) {
