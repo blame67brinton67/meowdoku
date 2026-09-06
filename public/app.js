@@ -7,7 +7,7 @@ const state = {
   playerId: null, user: null, guest: null,
   mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false, dragPoint: null,
   singleStartedAt: 0, singleMistakes: 0, singleAttemptId: null,
-  touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: '', pane: 'board',
+  touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, joining: null, idleNotice: '', pane: 'board',
   hintQuota: null, hint: null, hintLevel: 0, hintBusy: false, hintMessage: '', boardView: 'fastest'
 };
 // Deep, hue *and* lightness varied so neighbouring regions stay apart even at
@@ -847,17 +847,20 @@ async function showMultiplayer() {
     : '<p class="empty public-empty">目前沒有公開房間。開一間讓大家加入吧！</p>';
   view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><div class="page-body"><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label><label>最後衝刺秒數<input name="sprintSeconds" type="text" inputmode="numeric" maxlength="4" value="60" /></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section></div></div>`;
   document.querySelector('#back').onclick = home;
-  document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target), button = event.target.querySelector('button[type="submit"], button'), label = button.textContent; button.disabled = true; button.textContent = '建立中…'; socket.emit('create-room', { roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); };
+  document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target), button = event.target.querySelector('button[type="submit"], button'), label = button.textContent; button.disabled = true; button.textContent = '建立中…'; state.joining = true; socket.emit('create-room', { roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => { button.disabled = false; button.textContent = label; if (!result?.error) return; state.joining = null; alert(result.error); }); };
   document.querySelector('#join-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target); joinRoom({ code: form.get('code'), spectator: form.has('spectator') }); };
   document.querySelector('#refresh-rooms').onclick = showMultiplayer;
   document.querySelectorAll('[data-public-room]').forEach(button => button.addEventListener('click', () => joinRoom({ code: button.dataset.publicRoom, spectator: false })));
 }
 // A locked room is only discovered on the first refusal, then asked for once.
-function joinRoom({ code, spectator }, password) {
+function joinRoom({ code, spectator, onFail }, password) {
+  state.joining = String(code || '').toUpperCase();
   socket.emit('join-room', { code, spectator, password }, result => {
     if (!result.error) return;
-    if (result.needsPassword && password === undefined) { const entered = prompt('這間房需要密碼，請輸入：'); if (entered !== null) return joinRoom({ code, spectator }, entered); return; }
+    state.joining = null;
+    if (result.needsPassword && password === undefined) { const entered = prompt('這間房需要密碼，請輸入：'); if (entered !== null) return joinRoom({ code, spectator, onFail }, entered); return onFail?.(); }
     alert(result.error);
+    onFail?.();
   });
 }
 function bindRoomButtons() {
@@ -962,7 +965,7 @@ function bindSprintDialog() {
   document.querySelector('#sprint-value')?.addEventListener('change', event => { const mode = document.querySelector('#sprint-mode')?.value || 'fixed'; socket.emit('set-sprint-setting', { code: state.room.code, mode, value: event.target.value }, result => { if (!result?.error) return syncSprintDialog(); alert(result.error); event.target.value = state.room.sprintMode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds; }); });
 }
 function exitRoom(message) {
-  state.room = null; state.resumeCode = null; state.connectionLost = false; state.watchingPlayerId = null;
+  state.room = null; state.joining = null; state.resumeCode = null; state.connectionLost = false; state.watchingPlayerId = null;
   state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.chat = [];
   home();
   if (message) alert(message);
@@ -970,6 +973,7 @@ function exitRoom(message) {
 // Leaving the room's page leaves the room itself; otherwise the server keeps
 // counting you as present and keeps broadcasting to a page that moved on.
 function dropRoom() {
+  state.joining = null;
   if (!state.room) return;
   socket.emit('leave-room', { code: state.room.code });
   state.room = null; state.resumeCode = null; state.watchingPlayerId = null; state.chat = [];
@@ -984,8 +988,11 @@ function leaveRoom() {
 
 socket.on('room-state', room => {
   // Reading a profile or a level list is not an invitation to be dragged back
-  // into the room, so a broadcast only paints when the room is the open page.
-  if (state.mode !== 'multi' && currentRoute().name !== 'multi') return;
+  // into the room, so a broadcast only paints when the room is the open page —
+  // or when it answers the join we just asked for from the lobby.
+  const invited = state.joining === true || state.joining === room.code;
+  if (!invited && state.mode !== 'multi' && currentRoute().name !== 'multi') return;
+  state.joining = null;
   state.room = room; state.mode = 'multi';
   navigate(`/multi/${room.code}`, { replace: currentRoute().name === 'multi' });
   const me = room.players.find(player => player.id === state.playerId);
@@ -1090,7 +1097,8 @@ function applyRoute() {
   if (name === 'single') return startSingle(param);
   if (name === 'multi') {
     if (state.room?.code === param) return renderGame();
-    return joinRoom({ code: param, spectator: false });
+    // A dead or declined invite link must not leave the page blank.
+    return joinRoom({ code: param, spectator: false, onFail: () => { history.replaceState({}, '', '/'); home(); } });
   }
   return home();
 }
@@ -1102,7 +1110,8 @@ if (/^#\/u\//.test(location.hash)) {
 }
 
 async function showProfile(username = null) {
-  const own = !username || username === state.user?.username;
+  // Accounts are case insensitive, so /profile/Alice is still Alice's own page.
+  const own = !username || username.toLowerCase() === state.user?.username?.toLowerCase();
   navigate(username ? `/profile/${username}` : state.user ? `/profile/${state.user.username}` : '/profile');
   dropRoom();
   state.mode = 'profile'; state.practice = null;
@@ -1162,6 +1171,8 @@ async function showPublicProfile(username, back) {
   const cleared = new Set(profile.cleared);
   const progressRow = (name, done, total) => `<li class="${total && done === total ? 'done' : ''}"><strong>${escapeHtml(name)}</strong><span class="bar"><i style="width:${total ? Math.round(done / total * 100) : 0}%"></i></span><b>${done} / ${total}</b></li>`;
   const chapterRows = profile.chapters.filter(chapter => chapter.levelIds.length).map(chapter => progressRow(chapter.name, chapter.levelIds.filter(id => cleared.has(id)).length, chapter.total));
+  const extra = levels.filter(level => !level.chapter);
+  if (extra.length) chapterRows.push(progressRow('其他關卡', extra.filter(level => cleared.has(level.id)).length, extra.length));
   const frameById = new Map(profile.frames.map(frame => [frame.id, frame]));
   const unlocked = profile.achievements.filter(a => a.unlockedAt);
   const history = profile.history || [];
