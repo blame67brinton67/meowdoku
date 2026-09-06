@@ -184,8 +184,9 @@ function createAuth(db, { now = Date.now } = {}) {
     setAvatar: (userId, avatar) => q.setAvatar.run(avatar, userId),
     setFrame: (userId, frame) => q.setFrame.run(frame, userId),
     setSettings: (userId, settings) => q.setSettings.run(JSON.stringify(settings), userId),
-    userLeaderboard: () => q.leaderboard.all().map(row => ({ id: row.id, name: row.display_name || row.username, cleared: row.cleared, avatar: row.avatar, frame: row.frame })),
+    userLeaderboard: () => q.leaderboard.all().map(row => ({ id: row.id, name: row.display_name || row.username, username: row.username, cleared: row.cleared, avatar: row.avatar, frame: row.frame })),
     userById: id => { const row = q.userById.get(id); return row ? publicUser(row) : null; },
+    userByUsername: username => { const row = typeof username === 'string' ? q.userByName.get(username) : null; return row ? publicUser(row) : null; },
     deleteGuestSessions: guestId => q.deleteGuestSessions.run(guestId)
   };
 }

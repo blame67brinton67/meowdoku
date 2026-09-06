@@ -99,18 +99,30 @@ test('only the host, identified by socket, can kick', async () => {
   assert.equal(room(code).players.size, 2);
 });
 
-test('kicked player is told, removed and cannot rejoin until unblocked', async () => {
+test('a plain kick clears the seat but the player may come back', async () => {
   const { code, sockets: [host, guest], ids: [, guestId] } = await makeRoom(['host', 'guest']);
   const kicked = once(guest, 'kicked');
-  const result = await emit(host, 'kick-player', { code, targetId: guestId });
-  assert.equal(result.ok, true);
+  assert.equal((await emit(host, 'kick-player', { code, targetId: guestId })).ok, true);
   assert.match((await kicked).reason, /移出/);
+  assert.equal(room(code).players.has(guestId), false);
+  assert.deepEqual([...room(code).kicked.keys()], []);
+  const again = await client(guest.cookie);
+  assert.equal((await emit(again, 'join-room', { code, name: 'guest' })).ok, true);
+  for (const socket of [host, again]) socket.disconnect();
+});
+
+test('a ban is told, removed and cannot rejoin until unblocked', async () => {
+  const { code, sockets: [host, guest], ids: [, guestId] } = await makeRoom(['host', 'guest']);
+  const kicked = once(guest, 'kicked');
+  const result = await emit(host, 'kick-player', { code, targetId: guestId, ban: true });
+  assert.equal(result.ok, true);
+  assert.match((await kicked).reason, /封鎖/);
   assert.equal(room(code).players.has(guestId), false);
   const again = await client(guest.cookie);
   const rejoin = await emit(again, 'join-room', { code, name: 'guest' });
-  assert.match(rejoin.error, /移出/);
+  assert.match(rejoin.error, /封鎖/);
   const resume = await emit(again, 'resume-room', { code, name: 'guest' });
-  assert.match(resume.error, /移出/);
+  assert.match(resume.error, /封鎖/);
   const unblockForged = await emit(again, 'unblock-player', { code, targetId: guestId });
   assert.match(unblockForged.error, /房主/);
   const unblock = await emit(host, 'unblock-player', { code, targetId: guestId });
@@ -241,8 +253,23 @@ test('room settings: host only, lobby only, size clamped, failure leaves state i
   assert.equal((await emit(a, 'update-room-settings', { code, size: 1 })).ok, true);
   assert.equal(room(code).puzzle.size, 4);
   await startMatch(code, a, aId);
-  assert.match((await emit(a, 'update-room-settings', { code, visibility: 'public' })).error, /倒數/);
+  // Mid-round the host still edits freely, but the round underway keeps its own
+  // settings until the next one opens.
+  assert.equal((await emit(a, 'update-room-settings', { code, visibility: 'public', size: 5 })).pending, true);
   assert.equal(room(code).visibility, 'private');
+  assert.equal(room(code).puzzle.size, 4);
+  assert.equal((await emit(a, 'restart-room', { code })).ok, true);
+  assert.equal(room(code).visibility, 'public');
+  assert.equal(room(code).puzzle.size, 5);
+});
+
+test('a sprint change made mid-round only lands on the round the host starts next', async () => {
+  const { code, sockets: [a], ids: [aId] } = await makeRoom(['a']);
+  await startMatch(code, a, aId);
+  assert.equal((await emit(a, 'set-sprint-setting', { code, mode: 'fixed', value: 5 })).pending, true);
+  assert.equal(room(code).sprintSeconds, 60);
+  assert.equal((await emit(a, 'restart-room', { code })).ok, true);
+  assert.equal(room(code).sprintSeconds, 5);
 });
 
 test('room password gates joining and never leaves the server', async () => {
@@ -349,12 +376,40 @@ test('the sweep reaps a room nobody is connected to, and leaves a live one alone
   sweepRooms();
   assert.equal(room(code), undefined, 'a room with nobody connected is closed');
 
-  // A room that is still connected but untouched for half an hour also goes.
+  // Someone sitting in a room all day is not a reason to close it.
   const idle = await makeRoom(['idler']);
-  room(idle.code).lastActiveAt = Date.now() - 31 * 60_000;
-  const closed = once(idle.sockets[0], 'room-closed');
+  room(idle.code).lastActiveAt = Date.now() - 24 * 60 * 60_000;
   sweepRooms();
-  assert.equal((await closed).reason, '房間閒置太久，已自動關閉');
-  assert.equal(room(idle.code), undefined);
+  assert.ok(room(idle.code), 'an idle room with someone connected stays open');
   for (const socket of [...sockets, ...idle.sockets]) socket.disconnect();
+});
+
+test('the server answers the clock check countdowns are measured against', async () => {
+  const socket = await client();
+  const before = Date.now();
+  const { now } = await emit(socket, 'time-check', null);
+  assert.ok(now >= before && now <= Date.now(), 'the reply carries the server clock');
+  socket.disconnect();
+});
+
+test('deep links to a page are served the app, unknown paths are not', async () => {
+  for (const path of ['/single/lvl-1', '/multi/ABCD', '/profile/catone', '/profile']) {
+    const response = await fetch(`${url}${path}`);
+    assert.equal(response.status, 200, path);
+    assert.match(await response.text(), /<div id="view">|id="view"/);
+  }
+  assert.equal((await fetch(`${url}/nope/nope`)).status, 404);
+});
+
+test('a public room stays in the listing after its round finishes', async () => {
+  const { code, sockets: [a], ids: [aId] } = await makeRoom(['a']);
+  const listed = async () => (await fetch(`${url}/api/public-rooms`).then(r => r.json())).find(r => r.code === code);
+  assert.equal((await listed()).status, 'lobby');
+  await startMatch(code, a, aId);
+  const done = finished(a);
+  await solve(code, a, aId);
+  await done;
+  assert.equal(room(code).status, 'finished');
+  assert.equal((await listed()).status, 'finished', 'the next round happens in this room, so it stays visible');
+  a.disconnect();
 });

@@ -191,10 +191,28 @@
 .cell.hl-cell { box-shadow: inset 0 0 0 4px #ffd447, 0 0 0 2px rgba(255, 212, 71, .6); animation: hint-pulse 1.1s ease-in-out infinite; }
 @keyframes hint-pulse { 50% { box-shadow: inset 0 0 0 4px #fff2b0, 0 0 12px 4px rgba(255, 212, 71, .75); } }
 
-.person-row { display: flex; align-items: center; gap: 4px; }
-.person-row .person { flex: 1; min-width: 0; }
+/* A member row is a crowned/ringed avatar on the left and the name with its
+   progress stacked against the right edge. */
+.person-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-bottom: 1px solid var(--divider); border-radius: 10px; font-size: 14px; }
+.person-row.watching { background: rgba(var(--secondary-rgb), .16); box-shadow: inset 0 0 0 1px rgba(var(--secondary-rgb), .32); }
+.person-row.eliminated { color: var(--danger-text); background: rgba(var(--danger-rgb), .14); }
+.person-row.eliminated small, .person-row.eliminated .name-link { color: var(--danger-text); }
+.person-row.newly-eliminated { animation: eliminated-flash .55s ease-out; }
+.person-row .person { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 2px; border-bottom: 0; }
+.person-id { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-end; text-align: right; line-height: 1.3; }
+.person-id strong { font-size: 13px; overflow-wrap: anywhere; }
+.person-id .player-progress { font-size: 10px; color: var(--text-muted); }
+.avatar.crowned { position: relative; overflow: visible; }
+.avatar.crowned::after { content: '👑'; position: absolute; top: -11px; left: 50%; transform: translateX(-50%); font-size: 12px; line-height: 1; filter: drop-shadow(0 1px 1px rgba(30, 32, 41, .3)); }
+.avatar.is-me { box-shadow: 0 0 0 2px #2f9e5c; }
+.room-panel .compact { align-self: flex-start; width: auto; margin-top: 8px; padding: 6px 12px; font-size: 12px; }
+.pending-note { display: block; margin-top: 2px; color: var(--accent); font-size: 11px; }
 .kick-button { border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; padding: 3px 8px; white-space: nowrap; }
 .kick-button:hover { border-color: #a9262f; color: #a9262f; }
+.profile-link { display: inline-block; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; text-decoration: none; padding: 3px 8px; white-space: nowrap; }
+.profile-link:hover { border-color: var(--orange); color: var(--orange); }
+.name-link { border: 0; padding: 0; background: none; font: inherit; color: inherit; text-decoration: underline dotted; text-underline-offset: 2px; }
+.name-link:hover { color: var(--orange); text-decoration-style: solid; }
 .streak { font-style: normal; font-size: 11px; color: var(--orange); }
 .board-tabs { display: flex; gap: 12px; margin-bottom: 6px; }
 .board-tabs .link-button { padding: 0; font-size: 12px; color: var(--muted); }
@@ -207,6 +225,11 @@
 #room-group .password-row { display: flex; justify-content: flex-end; gap: 8px; padding: 2px 0 0; }
 #room-group .password-row .copy-button { width: auto; margin: 0; padding: 7px 14px; font-size: 13px; }
 #room-group .setting-note.wide { justify-self: stretch; grid-column: 1 / -1; margin: 8px 0 0; text-align: left; line-height: 1.5; }
+/* Removing a member asks which of the two removals the host meant. */
+#kick-dialog .kick-choices { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+#kick-dialog .kick-choices .copy-button { flex: 1 1 160px; width: auto; margin: 0; }
+#kick-dialog .copy-button.danger { color: var(--danger-text); border-color: rgba(var(--danger-rgb), .5); background: rgba(var(--danger-rgb), .1); }
+#kick-dialog .setting-note.wide { display: block; margin: 12px 0 0; text-align: left; }
 /* Home: the multiplayer card keeps both actions on one line in landscape so
    the history button is never pushed past the card's edge. */
 .mode-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: auto; width: 100%; }
