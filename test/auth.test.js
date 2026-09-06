@@ -31,15 +31,15 @@ test('scrypt hashes verify only with the same password', async () => {
   assert.notDeepEqual(again.salt, salt);
 });
 
-test('registration rules: username shape and weak passwords', () => {
+test('registration rules: username shape, password length only', () => {
   assert.ok(validateUsername('ab'));
   assert.ok(validateUsername('a'.repeat(21)));
   assert.ok(validateUsername('貓咪'));
   assert.ok(validateUsername('has space'));
   assert.equal(validateUsername('Cat_Nap-01'), null);
-  assert.ok(validatePassword('short'));
+  assert.ok(validatePassword(''));
   assert.ok(validatePassword('x'.repeat(73)));
-  for (const weak of ['password', '12345678', 'meowdoku', 'PASSWORD', 'qwertyuiop', 'aaaaaaaa', 'abcdefgh']) assert.ok(validatePassword(weak), weak);
+  for (const easy of ['a', 'short', 'password', '12345678', 'meowdoku', 'aaaaaaaa']) assert.equal(validatePassword(easy), null, easy);
   assert.equal(validatePassword(PASSWORD), null);
 });
 
@@ -185,6 +185,28 @@ test('read-only routes mint no guest without a cookie; signing up absorbs the gu
   assert.equal(created.status, 201);
   assert.deepEqual((await call('GET', '/api/progress/me', { cookie: created.cookie })).data.cleared, [LEVEL.id]);
   assert.deepEqual((await call('GET', '/api/progress/me', { cookie: guest.cookie })).data.cleared, [], 'the absorbed guest cookie is dead');
+});
+
+test('settings are per-account, validated field by field, and closed to guests', async () => {
+  const palette = Array.from({ length: 12 }, (_, index) => `#${String(index + 1).padStart(2, '0')}AABB`);
+  const theme = { palette, boardLine: '#C7CAD1', paper: '#FFFAF1' };
+  const guest = await call('GET', '/api/auth/me');
+  assert.equal((await call('POST', '/api/settings', { body: { theme }, cookie: guest.cookie })).status, 401);
+  const { cookie } = await signUp('settings_user');
+  assert.equal((await call('GET', '/api/auth/me', { cookie })).data.user.settings, null);
+
+  const stored = (await call('POST', '/api/settings', { body: { theme, recentThemes: ['dusk', 'dusk', 'bad id!', 42, 'a'.repeat(40), 'x1', 'x2', 'x3', 'x4', 'x5'], colorScheme: 'dark', vibrate: false, isAdmin: true }, cookie })).data.settings;
+  assert.deepEqual(stored.theme.palette, palette.map(color => color.toLowerCase()));
+  assert.deepEqual(stored.recentThemes, ['dusk', 'x1', 'x2', 'x3', 'x4'], 'deduped, filtered and capped at five');
+  assert.deepEqual({ colorScheme: stored.colorScheme, vibrate: stored.vibrate }, { colorScheme: 'dark', vibrate: false });
+  assert.ok(!('isAdmin' in stored));
+  assert.deepEqual((await call('GET', '/api/auth/me', { cookie })).data.user.settings, stored);
+
+  // A partial palette, a bad colour or an unknown scheme are dropped, not stored.
+  const partial = await call('POST', '/api/settings', { body: { theme: { palette: palette.slice(0, 11), boardLine: '#000000', paper: '#ffffff' }, colorScheme: 'neon' }, cookie });
+  assert.equal(partial.status, 400);
+  assert.equal((await call('POST', '/api/settings', { body: { theme: { ...theme, paper: 'javascript:alert(1)' } }, cookie })).status, 400);
+  assert.deepEqual((await call('GET', '/api/auth/me', { cookie })).data.user.settings, stored, 'the rejected writes changed nothing');
 });
 
 test('single-complete uses the cookie identity, not the body', async () => {

@@ -23,6 +23,7 @@ const DEFAULT_PALETTE = ['#c4423d', '#2b6cb0', '#c07c12', '#2c7a4b', '#6b4b9e', 
 const DEFAULT_THEME = { palette: DEFAULT_PALETTE, boardLine: '#c7cad1', paper: '#fffaf1' };
 // Keep in sync with the [data-theme="dark"] --paper / --board-line tokens.
 const DARK_THEME = { boardLine: '#3d404b', paper: '#1b1c23' };
+const ROOM_SIZES = [4, 5, 6, 7, 8, 9, 10, 11, 12];
 const VALID_COLOR = /^#[0-9a-f]{6}$/i;
 const validColor = value => typeof value === 'string' && VALID_COLOR.test(value) ? value : null;
 function readTheme() {
@@ -36,7 +37,46 @@ function readTheme() {
 }
 const theme = readTheme();
 let palette = theme.palette.slice();
-function saveTheme() { localStorage.meowdokuTheme = JSON.stringify(theme); }
+// Themes the player actually used, most recent first, so switching back is one
+// click instead of hunting through the preset grid again.
+const RECENT_THEME_MAX = 5;
+function readRecentThemes() {
+  let stored = [];
+  try { stored = JSON.parse(localStorage.meowdokuRecentThemes) || []; } catch {}
+  return stored.filter(id => BOARD_THEMES.some(preset => preset.id === id)).slice(0, RECENT_THEME_MAX);
+}
+let recentThemes = readRecentThemes();
+function rememberTheme(id) {
+  if (!id) return;
+  recentThemes = [id, ...recentThemes.filter(entry => entry !== id)].slice(0, RECENT_THEME_MAX);
+  localStorage.meowdokuRecentThemes = JSON.stringify(recentThemes);
+}
+function saveTheme() { localStorage.meowdokuTheme = JSON.stringify(theme); queueSettingsSync(); }
+// Colours, recent themes, colour scheme and haptics follow the account once
+// signed in; a guest keeps them in this browser only.
+let settingsSyncTimer = null;
+function queueSettingsSync() {
+  if (!state.user) return;
+  clearTimeout(settingsSyncTimer);
+  settingsSyncTimer = setTimeout(() => {
+    api('/api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme, recentThemes, colorScheme: readColorScheme(), vibrate: localStorage.meowdokuVibrate !== '0' }) }).catch(() => {});
+  }, 500);
+}
+// Account settings win over whatever this browser had, and are mirrored into
+// localStorage so the next load paints the right colours before /me answers.
+function applyAccountSettings(settings) {
+  if (!settings || typeof settings !== 'object') return;
+  if (settings.theme) {
+    theme.palette = DEFAULT_PALETTE.map((color, index) => validColor(settings.theme.palette?.[index]) || color);
+    theme.boardLine = validColor(settings.theme.boardLine) || theme.boardLine;
+    theme.paper = validColor(settings.theme.paper) || theme.paper;
+    localStorage.meowdokuTheme = JSON.stringify(theme);
+  }
+  if (Array.isArray(settings.recentThemes)) { recentThemes = settings.recentThemes.filter(id => BOARD_THEMES.some(preset => preset.id === id)).slice(0, RECENT_THEME_MAX); localStorage.meowdokuRecentThemes = JSON.stringify(recentThemes); }
+  if (settings.colorScheme) localStorage.meowdokuColorScheme = settings.colorScheme;
+  if (typeof settings.vibrate === 'boolean') localStorage.meowdokuVibrate = settings.vibrate ? '1' : '0';
+  applyColorScheme(); syncThemeInputs();
+}
 const darkQuery = matchMedia('(prefers-color-scheme: dark)');
 const readColorScheme = () => { const scheme = localStorage.meowdokuColorScheme; return scheme === 'dark' || scheme === 'light' ? scheme : 'system'; };
 const isDark = () => document.documentElement.dataset.theme === 'dark';
@@ -60,7 +100,15 @@ function applyTheme() {
 // a single tweaked swatch reads as 自訂 without a second piece of stored state.
 const sameColor = (a, b) => a.toLowerCase() === b.toLowerCase();
 const currentPreset = () => BOARD_THEMES.find(preset => sameColor(preset.boardLine, theme.boardLine) && sameColor(preset.paper, theme.paper) && preset.palette.every((color, index) => sameColor(color, theme.palette[index]))) || null;
-function applyPreset(preset) { theme.palette = preset.palette.slice(); theme.boardLine = preset.boardLine; theme.paper = preset.paper; saveTheme(); syncThemeInputs(); applyTheme(); }
+function applyPreset(preset) { theme.palette = preset.palette.slice(); theme.boardLine = preset.boardLine; theme.paper = preset.paper; rememberTheme(preset.id); saveTheme(); syncThemeInputs(); applyTheme(); }
+function renderRecentThemes() {
+  const box = document.querySelector('#recent-themes'), list = document.querySelector('#recent-theme-list');
+  const presets = recentThemes.map(id => BOARD_THEMES.find(preset => preset.id === id)).filter(Boolean);
+  box.hidden = !presets.length;
+  const active = currentPreset();
+  list.innerHTML = presets.map(preset => `<button type="button" class="recent-theme ${preset.id === active?.id ? 'selected' : ''}" data-recent-theme="${preset.id}"><span class="preset-swatches">${preset.palette.slice(0, 4).map(color => `<i style="background:${color}"></i>`).join('')}</span>${escapeHtml(preset.name)}</button>`).join('');
+  list.querySelectorAll('[data-recent-theme]').forEach(button => button.addEventListener('click', () => applyPreset(BOARD_THEMES.find(preset => preset.id === button.dataset.recentTheme))));
+}
 function syncThemeInputs() {
   document.querySelectorAll('[data-theme-palette]').forEach(input => { input.value = theme.palette[Number(input.dataset.themePalette)]; });
   document.querySelector('[data-theme-key="boardLine"]').value = effectiveColor('boardLine');
@@ -69,6 +117,7 @@ function syncThemeInputs() {
   syncVibrateToggle();
   const active = currentPreset();
   document.querySelectorAll('[data-theme-preset]').forEach(button => button.setAttribute('aria-checked', String(button.dataset.themePreset === active?.id)));
+  renderRecentThemes();
   document.querySelector('#theme-preset-hint').textContent = active ? `目前：${active.name}。點選後仍可在下方微調單一顏色。` : '目前：自訂。點選主題會覆蓋下方的顏色。';
 }
 // Haptics: touch only, 15ms for a cat and 8ms for a cross. A drag buzzes at
@@ -145,6 +194,7 @@ async function loadIdentity() {
   const me = await api('/api/auth/me');
   state.user = me.user; state.guest = me.guest; state.playerId = me.user?.id || me.guest?.id || null;
   renderAuth();
+  if (state.user?.settings) applyAccountSettings(state.user.settings);
 }
 document.querySelector('#auth-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -165,15 +215,15 @@ document.querySelector('#logout-button').addEventListener('click', async () => {
 });
 document.querySelector('#theme-button').addEventListener('click', event => { syncThemeInputs(); openDialog(document.querySelector('#theme-dialog'), event.currentTarget); });
 document.querySelectorAll('dialog .close').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
-bindTooltips(); bindSprintDialog();
+bindTooltips(); bindSprintDialog(); bindRoomDialog();
 document.querySelector('#theme-preset-list').innerHTML = BOARD_THEMES.map(preset => `<button type="button" role="radio" aria-checked="false" data-theme-preset="${preset.id}" style="--paper-swatch:${preset.paper}"><span class="preset-swatches">${preset.palette.slice(0, 6).map(color => `<i style="background:${color}"></i>`).join('')}</span>${escapeHtml(preset.name)}</button>`).join('');
 document.querySelectorAll('[data-theme-preset]').forEach(button => button.addEventListener('click', () => applyPreset(BOARD_THEMES.find(preset => preset.id === button.dataset.themePreset))));
 document.querySelectorAll('[data-theme-palette]').forEach(input => input.addEventListener('input', () => { theme.palette[Number(input.dataset.themePalette)] = input.value; saveTheme(); syncThemeInputs(); applyTheme(); }));
 document.querySelectorAll('[data-theme-key]').forEach(input => input.addEventListener('input', () => { theme[input.dataset.themeKey] = input.value; saveTheme(); syncThemeInputs(); applyTheme(); }));
 document.querySelector('#reset-theme').addEventListener('click', () => applyPreset(DEFAULT_THEME));
-document.querySelector('#color-scheme').addEventListener('change', event => { localStorage.meowdokuColorScheme = event.target.value; applyColorScheme(); syncThemeInputs(); });
+document.querySelector('#color-scheme').addEventListener('change', event => { localStorage.meowdokuColorScheme = event.target.value; applyColorScheme(); syncThemeInputs(); queueSettingsSync(); });
 darkQuery.addEventListener('change', () => { if (readColorScheme() === 'system') { applyColorScheme(); syncThemeInputs(); } });
-document.querySelector('#vibrate-toggle').addEventListener('click', () => { localStorage.meowdokuVibrate = vibrateEnabled() ? '0' : '1'; syncVibrateToggle(); if (vibrateEnabled()) vibrate('cat'); });
+document.querySelector('#vibrate-toggle').addEventListener('click', () => { localStorage.meowdokuVibrate = vibrateEnabled() ? '0' : '1'; syncVibrateToggle(); queueSettingsSync(); if (vibrateEnabled()) vibrate('cat'); });
 applyColorScheme();
 // Right-click is reserved for puzzle annotation, not the browser context menu.
 document.addEventListener('contextmenu', event => event.preventDefault());
@@ -289,7 +339,7 @@ async function home() {
   view.innerHTML = `<div class="home">
     <section class="hero"><div><p class="eyebrow">A LITTLE LOGIC GAME</p><h1>幫每隻貓咪<br><em>找到牠的地盤</em></h1><p>每行、每列與每個色塊都只能住一隻貓。不要點錯，貓咪的尊嚴很脆弱。</p></div><div class="hero-cat" aria-hidden="true">=^･ω･^=</div></section>
     <section class="mode-grid"><article class="mode-card solo"><span class="mode-icon">⌁</span><p class="eyebrow">SOLO MODE</p><h2>獨自推理</h2><p>挑一個關卡，慢慢找到唯一的答案。</p><button class="primary" id="open-solo">選擇關卡</button></article>
-    <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><button class="dark-button" id="open-multi">進入多人遊戲</button><button class="link-button" id="open-history">對戰紀錄（重新解題）</button></article></section>
+    <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><div class="mode-actions"><button class="dark-button" id="open-multi">進入多人遊戲</button><button class="link-button" id="open-history">對戰紀錄（重新解題）</button></div></article></section>
     <section class="lower-grid"><article class="panel continue-panel"><div><p class="eyebrow">SINGLE PLAYER</p><h2>接著挑戰</h2><p>${!nextLevel ? '難度階梯正在產生，稍等幾秒再回來。' : nextIndex === -1 ? '所有罐罐都找到了，真是傳奇貓奴。' : '解完前一關，下一盒罐罐正在等你。'}</p></div><div class="continue-level"><span>${continueLabel}</span><strong>${nextLevel ? escapeHtml(nextLevel.name) : '尚未有關卡'}</strong><small>${nextLevel ? `${nextLevel.size} × ${nextLevel.size}` : '貓咪還在畫地圖'}</small>${nextLevel ? ratingLine(nextLevel.rating) : ''}</div><button class="primary" id="continue-solo" ${nextLevel ? '' : 'disabled'}>${nextIndex === -1 ? '再次挑戰 →' : '繼續解題 →'}</button><button class="link-button" id="open-solo-2">查看全部關卡</button></article>
     <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.top.length ? `<ol>${leaderboard.top.map(entry => `<li class="${entry.me ? 'me' : ''}"><span>${entry.rank}</span>${avatarHtml(entry.avatar, entry.frame, 'small')}<strong>${escapeHtml(entry.name)}${entry.me ? '（你）' : ''}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}${myRankLine(leaderboard)}</article></section></div>`;
   document.querySelector('#open-solo').onclick = showLevels; document.querySelector('#open-solo-2').onclick = showLevels;
@@ -452,11 +502,11 @@ function patchGame(puzzle, room, me, isViewing, message) {
   if (state.mode !== 'multi') return;
   const panel = document.querySelector('.room-panel'), html = renderRoomPanel(room, me);
   if (panel && panel.outerHTML !== html) {
-    const sprintFocused = document.activeElement?.id === 'sprint-value', passwordFocused = document.activeElement?.id === 'room-password', typedPassword = document.querySelector('#room-password')?.value || '';
+    // The settings controls live in the static dialog, so a panel rerender
+    // cannot disturb what the host is typing there.
+    const sprintFocused = document.activeElement?.id === 'sprint-value';
     panel.outerHTML = html; bindRoomButtons();
     if (sprintFocused) { const input = document.querySelector('#sprint-value'); input?.focus(); input?.setSelectionRange(input.value.length, input.value.length); }
-    const password = document.querySelector('#room-password');
-    if (password && typedPassword) { password.value = typedPassword; if (passwordFocused) { password.focus(); password.setSelectionRange(typedPassword.length, typedPassword.length); } }
   }
 }
 function patchBoard(boardState) {
@@ -512,11 +562,10 @@ function renderRoomPanel(room, me) {
   const sprintSetting = room.status === 'lobby'
     ? `<p class="sprint-setting readonly" data-sprint-mode="${sprintMode}" data-sprint-value="${sprintValue}"><span>最後衝刺：<b>${sprintSummary}</b></span>${isHost ? '<button type="button" class="icon-button" id="sprint-settings-button" aria-label="房間設定" aria-haspopup="dialog">⚙</button>' : ''}</p>`
     : '';
-  const sizeOptions = [4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => `<option value="${n}" ${n === room.puzzle.size ? 'selected' : ''}>${n} × ${n}</option>`).join('');
+  // Board size, visibility and password are edited in #sprint-dialog; the panel
+  // only shows the resulting state and carries it for syncRoomDialog().
   const roomSettings = room.status === 'lobby'
-    ? isHost
-      ? `<div class="room-settings"><label>棋盤大小<select id="room-size" ${room.restartPending ? 'disabled' : ''}>${sizeOptions}</select></label><label>房間類型<select id="room-visibility"><option value="public" ${room.visibility === 'public' ? 'selected' : ''}>公開（顯示於列表）</option><option value="private" ${room.visibility === 'private' ? 'selected' : ''}>私人（僅限房號）</option></select></label><label>房間密碼<span class="password-row"><input id="room-password" type="password" maxlength="32" autocomplete="off" placeholder="${room.hasPassword ? '已設定，輸入以替換' : '未設定'}" /><button class="copy-button" id="room-password-save">設定</button>${room.hasPassword ? '<button class="copy-button" id="room-password-clear">清除密碼</button>' : ''}</span></label><small>改大小會重新產題；密碼最長 32 字，伺服器只保存雜湊。</small></div>`
-      : `<p class="sprint-setting readonly">棋盤 <b>${room.puzzle.size} × ${room.puzzle.size}</b> · ${room.visibility === 'private' ? '私人房' : '公開房'} · ${room.hasPassword ? '🔒 需要密碼' : '無密碼'}</p>`
+    ? `<p class="sprint-setting readonly" data-room-size="${room.puzzle.size}" data-room-visibility="${room.visibility === 'private' ? 'private' : 'public'}" data-room-password="${room.hasPassword ? '1' : ''}" data-room-locked="${room.restartPending ? '1' : ''}" data-room-host="${isHost ? '1' : ''}"><span>棋盤 <b>${room.puzzle.size} × ${room.puzzle.size}</b> · ${room.visibility === 'private' ? '私人房' : '公開房'} · ${room.hasPassword ? '🔒 需要密碼' : '無密碼'}</span></p>`
     : '';
   const streak = entry => entry.streak >= 2 ? ` <em class="streak">🔥 連霸 ${entry.streak}</em>` : '';
   const boardTabs = `<div class="board-tabs"><button class="link-button ${state.boardView === 'fastest' ? 'active' : ''}" data-board-view="fastest">最快紀錄</button><button class="link-button ${state.boardView === 'points' ? 'active' : ''}" data-board-view="points">積分榜</button></div>`;
@@ -714,16 +763,10 @@ function bindRoomButtons() {
   });
   document.querySelectorAll('[data-kick]').forEach(button => button.addEventListener('click', () => { const target = state.room.players.find(player => player.id === button.dataset.kick); if (!confirm(`要把 ${target?.name || '這位成員'} 移出房間嗎？他將無法再加入，除非你解除封鎖。`)) return; socket.emit('kick-player', { code: state.room.code, targetId: button.dataset.kick }, result => result?.error && alert(result.error)); }));
   document.querySelectorAll('[data-unblock]').forEach(button => button.addEventListener('click', () => socket.emit('unblock-player', { code: state.room.code, targetId: button.dataset.unblock }, result => result?.error && alert(result.error))));
-  const updateSettings = (payload, done) => socket.emit('update-room-settings', { code: state.room.code, ...payload }, result => { if (result?.error) alert(result.error); done?.(result); });
-  document.querySelector('#room-size')?.addEventListener('change', event => { event.target.disabled = true; updateSettings({ size: event.target.value }, () => renderGame()); });
-  document.querySelector('#room-visibility')?.addEventListener('change', event => updateSettings({ visibility: event.target.value }, () => renderGame()));
-  document.querySelector('#room-password-save')?.addEventListener('click', () => { const input = document.querySelector('#room-password'); updateSettings({ password: input.value }, result => { if (result?.ok) input.value = ''; }); });
-  document.querySelector('#room-password-clear')?.addEventListener('click', () => updateSettings({ clearPassword: true }));
-  document.querySelector('#room-password')?.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); document.querySelector('#room-password-save')?.click(); } });
   document.querySelectorAll('[data-board-view]').forEach(button => button.addEventListener('click', () => { state.boardView = button.dataset.boardView; renderGame(); }));
   document.querySelector('#role-toggle')?.addEventListener('click', () => socket.emit('set-lobby-role', { code: state.room.code, spectator: !state.room.players.find(player => player.id === state.playerId)?.spectator }, result => result?.error && alert(result.error)));
   document.querySelector('#sprint-settings-button')?.addEventListener('click', event => openDialog(document.querySelector('#sprint-dialog'), event.currentTarget));
-  syncSprintDialog();
+  syncSprintDialog(); syncRoomDialog();
 }
 // The sprint controls live in a static dialog; the room panel only carries the
 // current values as data attributes and the dialog mirrors them on every patch.
@@ -733,6 +776,33 @@ function syncSprintDialog() {
   group.dataset.mode = summary.dataset.sprintMode;
   mode.value = summary.dataset.sprintMode;
   if (document.activeElement !== value) value.value = summary.dataset.sprintValue;
+}
+// Same idea for the room's own settings: the host edits them in the dialog and
+// the panel line is the single source of truth the dialog mirrors.
+function syncRoomDialog() {
+  const group = document.querySelector('#room-group'), summary = document.querySelector('[data-room-size]');
+  if (!group) return;
+  group.hidden = !summary || summary.dataset.roomHost !== '1';
+  if (group.hidden) return;
+  const size = document.querySelector('#room-size'), locked = summary.dataset.roomLocked === '1', hasPassword = summary.dataset.roomPassword === '1';
+  const options = ROOM_SIZES.map(n => `<option value="${n}">${n} × ${n}</option>`).join('');
+  if (size.innerHTML !== options) size.innerHTML = options;
+  size.value = summary.dataset.roomSize; size.disabled = locked;
+  document.querySelector('#room-visibility').value = summary.dataset.roomVisibility;
+  const password = document.querySelector('#room-password');
+  password.placeholder = hasPassword ? '已設定，輸入以替換' : '未設定';
+  document.querySelector('#room-password-clear').hidden = !hasPassword;
+  document.querySelector('#room-settings-note').textContent = locked ? '新題目正在產生，稍後才能再改大小。' : '改大小會重新產題；密碼最長 32 字，伺服器只保存雜湊。';
+}
+function bindRoomDialog() {
+  const updateSettings = (payload, done) => socket.emit('update-room-settings', { code: state.room.code, ...payload }, result => { if (result?.error) alert(result.error); done?.(result); });
+  document.querySelector('#room-size').addEventListener('change', event => { event.target.disabled = true; updateSettings({ size: event.target.value }, () => renderGame()); });
+  document.querySelector('#room-visibility').addEventListener('change', event => updateSettings({ visibility: event.target.value }, () => renderGame()));
+  const password = document.querySelector('#room-password');
+  document.querySelector('#room-password-save').addEventListener('click', () => updateSettings({ password: password.value }, result => { if (result?.ok) password.value = ''; }));
+  document.querySelector('#room-password-clear').addEventListener('click', () => { password.value = ''; updateSettings({ clearPassword: true }); });
+  // The board listens on the document and the dialog form would submit on Enter.
+  password.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); document.querySelector('#room-password-save').click(); } });
 }
 function openDialog(dialog, opener) {
   if (!dialog || dialog.open) return;

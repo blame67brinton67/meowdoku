@@ -53,7 +53,7 @@
       <p class="eyebrow">ACCOUNT</p><h2>讓貓咪認得你</h2>
       <div class="auth-tabs"><button type="button" class="auth-tab active" data-auth-tab="login">登入</button><button type="button" class="auth-tab" data-auth-tab="register">註冊</button></div>
       <label>帳號<input id="auth-username" autocomplete="username" minlength="3" maxlength="20" pattern="[A-Za-z0-9_\-]{3,20}" placeholder="3–20 個英數字、_ 或 -" required /></label>
-      <label>密碼<input id="auth-password" type="password" autocomplete="current-password" minlength="8" maxlength="72" placeholder="8–72 個字元" required /></label>
+      <label>密碼<input id="auth-password" type="password" autocomplete="current-password" maxlength="72" placeholder="1–72 個字元" required /></label>
       <button class="primary" id="auth-submit" value="default">登入</button>
       <p id="guest-notice" class="hint"></p>
       <p id="auth-message" class="message"></p>
@@ -75,7 +75,7 @@
         </div>
       </section>
       <section class="setting-group"><p class="eyebrow">自訂顏色</p>
-      <fieldset class="theme-presets"><legend>棋盤主題</legend><div id="theme-preset-list" role="radiogroup"></div><p class="theme-preset-hint" id="theme-preset-hint"></p></fieldset>
+      <fieldset class="theme-presets"><legend>棋盤主題</legend><div class="recent-themes" id="recent-themes" hidden><p class="eyebrow">最近使用<span class="hint-wrap"><button type="button" class="hint-dot" aria-label="最近使用說明" aria-describedby="tip-recent-themes" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-recent-themes">最近套用過的棋盤主題，點一下即可切回。登入後這份紀錄與你的配色會存在帳號上，換裝置也跟著走。</span></span></p><div id="recent-theme-list"></div></div><div id="theme-preset-list" role="radiogroup"></div><p class="theme-preset-hint" id="theme-preset-hint"></p></fieldset>
       <fieldset class="theme-colors"><legend>區域顏色（N × N 會使用前 N 種）</legend><label>顏色 1<input type="color" data-theme-palette="0" /></label><label>顏色 2<input type="color" data-theme-palette="1" /></label><label>顏色 3<input type="color" data-theme-palette="2" /></label><label>顏色 4<input type="color" data-theme-palette="3" /></label><label>顏色 5<input type="color" data-theme-palette="4" /></label><label>顏色 6<input type="color" data-theme-palette="5" /></label><label>顏色 7<input type="color" data-theme-palette="6" /></label><label>顏色 8<input type="color" data-theme-palette="7" /></label><label>顏色 9<input type="color" data-theme-palette="8" /></label><label>顏色 10<input type="color" data-theme-palette="9" /></label><label>顏色 11<input type="color" data-theme-palette="10" /></label><label>顏色 12<input type="color" data-theme-palette="11" /></label></fieldset>
       <label>棋盤格線顏色<input type="color" data-theme-key="boardLine" /></label>
       <label>頁面背景顏色<input type="color" data-theme-key="paper" /></label>
@@ -87,6 +87,26 @@
     <form method="dialog" class="dialog-card" id="sprint-form">
       <button type="button" class="close" aria-label="關閉">×</button>
       <p class="eyebrow">ROOM SETTINGS</p><h2 id="sprint-dialog-title">房間設定</h2>
+      <section class="setting-group" id="room-group" hidden>
+        <p class="eyebrow">房間</p>
+        <div class="setting-row">
+          <span class="setting-label"><label for="room-size">棋盤大小</label><span class="hint-wrap"><button type="button" class="hint-dot" aria-label="棋盤大小說明" aria-describedby="tip-room-size" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-room-size">只有在等待開始時能改；換大小會立刻重新產生一張新地圖。</span></span></span>
+          <select id="room-size"></select>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label"><label for="room-visibility">房間類型</label><span class="hint-wrap"><button type="button" class="hint-dot" aria-label="房間類型說明" aria-describedby="tip-room-visibility" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-room-visibility">公開房會出現在大廳列表，私人房只能用房號進入。</span></span></span>
+          <select id="room-visibility"><option value="public">公開（顯示於列表）</option><option value="private">私人（僅限房號）</option></select>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label"><label for="room-password">房間密碼</label><span class="hint-wrap"><button type="button" class="hint-dot" aria-label="房間密碼說明" aria-describedby="tip-room-password" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-room-password">最長 32 字，伺服器只保存雜湊。留空按「設定」不會有任何變更。</span></span></span>
+          <input id="room-password" type="password" maxlength="32" autocomplete="off" placeholder="未設定" />
+        </div>
+        <div class="password-row">
+          <button type="button" class="copy-button" id="room-password-save">設定密碼</button>
+          <button type="button" class="copy-button" id="room-password-clear" hidden>清除密碼</button>
+        </div>
+        <p class="setting-note wide" id="room-settings-note"></p>
+      </section>
       <section class="setting-group" id="sprint-group" data-mode="fixed">
         <p class="eyebrow">最後衝刺</p>
         <div class="setting-row">

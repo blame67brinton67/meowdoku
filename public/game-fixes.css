@@ -204,8 +204,21 @@
 .blocked-list { margin-top: 12px; font-size: 12px; }
 .blocked-list p { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; }
 .blocked-list .link-button { font-size: 12px; padding: 0; }
-.room-settings { display: grid; gap: 8px; margin: 10px 0; font-size: 13px; }
-.room-settings label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.room-settings input, .room-settings select { max-width: 150px; border: 1px solid var(--border-soft); border-radius: 8px; padding: 4px 8px; background: var(--surface-solid); }
-.room-settings .password-row { display: flex; gap: 6px; }
-.room-settings small { color: var(--muted); font-size: 11px; }
+/* Board size, visibility and password live in the room settings dialog. */
+#room-group .password-row { display: flex; justify-content: flex-end; gap: 8px; padding: 2px 0 0; }
+#room-group .password-row .copy-button { width: auto; margin: 0; padding: 7px 14px; font-size: 13px; }
+#room-group .setting-note.wide { justify-self: stretch; grid-column: 1 / -1; margin: 8px 0 0; text-align: left; line-height: 1.5; }
+/* Home: the multiplayer card keeps both actions on one line in landscape so
+   the history button is never pushed past the card's edge. */
+.mode-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: auto; width: 100%; }
+.mode-card .mode-actions .primary, .mode-card .mode-actions .dark-button { margin-top: 0; }
+.mode-actions .link-button { padding: 0; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
+/* Recently used board themes, newest first. */
+.recent-themes { margin-bottom: 10px; }
+.recent-themes .eyebrow { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+#recent-theme-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.recent-theme { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-soft); border-radius: 999px; padding: 5px 12px; background: rgba(var(--surface-rgb), .7); color: var(--text); font: inherit; font-size: 12px; }
+.recent-theme:hover { border-color: var(--accent); }
+.recent-theme.selected { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.recent-theme .preset-swatches { display: inline-flex; gap: 2px; }
+.recent-theme .preset-swatches i { width: 9px; height: 9px; border-radius: 2px; }

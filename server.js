@@ -259,7 +259,7 @@ function historyFor(identity) {
 }
 function publicIdentity(identity) {
   return identity.kind === 'user'
-    ? { user: { id: identity.id, username: identity.username, displayName: identity.displayName, isAdmin: identity.isAdmin, avatar: identity.avatar, frame: identity.frame }, guest: null }
+    ? { user: { id: identity.id, username: identity.username, displayName: identity.displayName, isAdmin: identity.isAdmin, avatar: identity.avatar, frame: identity.frame, settings: identity.settings || null }, guest: null }
     : { user: null, guest: { id: identity.id, ephemeral: true, notice: '訪客資料在關閉網頁後不會保留，登入才能永久保存。' } };
 }
 // A guest who signs in keeps what they just played: the guest identity came
@@ -347,6 +347,31 @@ app.post('/api/profile', requireUser, (req, res) => {
   }
   applyProfile(req.identity.id, writes);
   res.json({ user: auth.userById(req.identity.id) });
+});
+// Client settings (board colours, recently used themes, colour scheme,
+// haptics) live on the account so they follow the player between devices.
+// Every field is re-validated here: the column stores our shape, not the
+// browser's.
+const SETTINGS_COLOR = /^#[0-9a-f]{6}$/i;
+const SETTINGS_THEME_ID = /^[a-z][a-z0-9-]{0,23}$/;
+const RECENT_THEMES_MAX = 5;
+function sanitizeSettings(input) {
+  if (!input || typeof input !== 'object') return null;
+  const settings = {};
+  const color = value => typeof value === 'string' && SETTINGS_COLOR.test(value) ? value.toLowerCase() : null;
+  const palette = Array.isArray(input.theme?.palette) ? input.theme.palette.slice(0, 12).map(color) : null;
+  const boardLine = color(input.theme?.boardLine), paper = color(input.theme?.paper);
+  if (palette?.length === 12 && palette.every(Boolean) && boardLine && paper) settings.theme = { palette, boardLine, paper };
+  if (Array.isArray(input.recentThemes)) settings.recentThemes = [...new Set(input.recentThemes.filter(id => typeof id === 'string' && SETTINGS_THEME_ID.test(id)))].slice(0, RECENT_THEMES_MAX);
+  if (['system', 'light', 'dark'].includes(input.colorScheme)) settings.colorScheme = input.colorScheme;
+  if (typeof input.vibrate === 'boolean') settings.vibrate = input.vibrate;
+  return Object.keys(settings).length ? settings : null;
+}
+app.post('/api/settings', requireUser, (req, res) => {
+  const settings = sanitizeSettings(req.body);
+  if (!settings) return res.status(400).json({ error: '沒有可以保存的設定' });
+  auth.setSettings(req.identity.id, settings);
+  res.json({ settings });
 });
 app.get('/api/history/me', ensureIdentity, (req, res) => res.json(historyFor(req.identity)));
 // Legacy read-only paths keyed by the browser-generated visitorId, kept so the
