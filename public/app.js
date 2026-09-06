@@ -352,7 +352,7 @@ document.querySelector('#save-order').addEventListener('click', async () => {
 });
 
 async function home() {
-  if (profileRoute()) history.replaceState(null, '', location.pathname + location.search);
+  navigate('/');
   state.mode = 'home'; state.single = null; state.room = null; state.practice = null; state.cats.clear(); state.marks.clear();
   const [levels, leaderboard, progress] = await Promise.all([api('/api/levels'), api('/api/leaderboard'), api('/api/progress/me')]);
   state.levels = levels; state.cleared = new Set(progress.cleared);
@@ -376,6 +376,13 @@ function nameLink(name, username) {
     ? `<button type="button" class="name-link" data-profile="${escapeHtml(username)}" title="看 ${escapeHtml(name)} 的個人頁">${escapeHtml(name)}</button>`
     : escapeHtml(name);
 }
+// Inside a room the page opens in a new tab, so reading someone's profile
+// never pulls you out of a live match.
+function roomNameLink(name, username) {
+  return username
+    ? `<a class="name-link" href="/profile/${encodeURIComponent(username)}" target="_blank" rel="noopener" title="看 ${escapeHtml(name)} 的個人頁">${escapeHtml(name)}</a>`
+    : escapeHtml(name);
+}
 // The rank comes from the server; a guest is told to sign in rather than
 // shown a number that would vanish with the cookie.
 function myRankLine(leaderboard) {
@@ -396,8 +403,11 @@ async function showLevels() {
   document.querySelector('#back').onclick = home; document.querySelectorAll('[data-level]').forEach(button => button.onclick = () => startSingle(button.dataset.level));
 }
 async function startSingle(id) {
+  navigate(`/single/${id}`);
   if (!state.levels.length) state.levels = await api('/api/levels');
-  state.single = await api(`/api/levels/${id}`); state.mode = 'single'; state.singleCompleted = false; state.nextSingleId = null;
+  try { state.single = await api(`/api/levels/${id}`); }
+  catch { return home(); }
+  state.mode = 'single'; state.singleCompleted = false; state.nextSingleId = null;
   // Mistakes accumulate across retries of the same level until it is cleared.
   if (state.singleAttemptId !== id) { state.singleAttemptId = id; state.singleMistakes = 0; }
   state.singleStartedAt = Date.now();
@@ -572,7 +582,7 @@ function renderRoomPanel(room, me) {
   const watching = room.players.find(player => player.id === state.watchingPlayerId);
   const live = room.status === 'countdown' || room.status === 'playing';
   const replay = isHost
-    ? `<button class="${room.status === 'finished' ? 'primary' : 'copy-button'} wide" id="restart-room" ${room.restartPending ? 'disabled' : ''}>${room.restartPending ? '準備中…' : room.status === 'finished' ? '用原房號再來一局' : live ? '直接重開這一局' : '換一張新地圖'}</button>${live ? '<small class="restart-hint">進行中重開會作廢本局，不計入積分與最快紀錄。</small>' : ''}`
+    ? `<button class="${room.status === 'finished' ? 'primary' : 'copy-button'} wide compact" id="restart-room" ${room.restartPending ? 'disabled' : ''}>${room.restartPending ? '準備中…' : room.status === 'finished' ? '用原房號再來一局' : live ? '直接重開這一局' : '換一張新地圖'}</button>${live ? '<small class="restart-hint">進行中重開會作廢本局，不計入積分與最快紀錄。</small>' : ''}`
     : room.restartPending ? '<p class="waiting">房主正在準備新題目…</p>' : '';
   const blocked = isHost && room.kicked?.length
     ? `<div class="blocked-list"><p class="eyebrow">BLOCKED</p>${room.kicked.map(entry => `<p><span>${escapeHtml(entry.name)}</span><button class="link-button" data-unblock="${escapeHtml(entry.id)}">解除封鎖</button></p>`).join('')}</div>`
@@ -582,31 +592,46 @@ function renderRoomPanel(room, me) {
     ? '<button class="copy-button" id="copy-map">複製地圖</button><small class="map-copy-message" id="map-copy-message"></small>'
     : room.status === 'playing' ? '<small class="map-copy-hint">比賽結束後可複製地圖</small>' : '';
   const roleToggle = room.status === 'lobby' || room.status === 'finished'
-    ? `<button class="role-toggle" id="role-toggle">${me?.spectator ? (room.status === 'finished' ? '下一局加入，成為玩家' : '加入本局，成為玩家') : '改為觀戰者'}</button>` : '';
+    ? `<button class="role-toggle compact" id="role-toggle">${me?.spectator ? (room.status === 'finished' ? '下一局加入，成為玩家' : '加入本局，成為玩家') : '改為觀戰者'}</button>` : '';
   const sprintMode = room.sprintMode === 'multiply' ? 'multiply' : 'fixed';
   const sprintValue = sprintMode === 'multiply' ? room.sprintFactor : room.sprintSeconds;
   // The summary is public to every member, so it must never carry secrets
   // such as a room password.
   const sprintSummary = sprintMode === 'multiply' ? `第一名用時 × ${room.sprintFactor}` : `${room.sprintSeconds} 秒`;
-  const sprintSetting = room.status === 'lobby'
-    ? `<p class="sprint-setting readonly" data-sprint-mode="${sprintMode}" data-sprint-value="${sprintValue}"><span>最後衝刺：<b>${sprintSummary}</b></span>${isHost ? '<button type="button" class="icon-button" id="sprint-settings-button" aria-label="房間設定" aria-haspopup="dialog">⚙</button>' : ''}</p>`
-    : '';
+  // Settings can be opened during a round too, so the panel line stays up and
+  // spells out what the queued change will do to the next one.
+  const pending = room.pending || null;
+  const pendingSprint = pending && (pending.sprintMode || pending.sprintSeconds != null || pending.sprintFactor != null)
+    ? ((pending.sprintMode || sprintMode) === 'multiply'
+      ? `第一名用時 × ${pending.sprintFactor ?? room.sprintFactor}`
+      : `${pending.sprintSeconds ?? room.sprintSeconds} 秒`)
+    : null;
+  const nextRound = text => `<small class="pending-note">下一局套用：${text}</small>`;
+  const sprintSetting = `<p class="sprint-setting readonly" data-sprint-mode="${pending?.sprintMode || sprintMode}" data-sprint-value="${pendingSprint ? (pending.sprintMode === 'multiply' ? pending.sprintFactor ?? room.sprintFactor : pending.sprintSeconds ?? room.sprintSeconds) : sprintValue}"><span>最後衝刺：<b>${sprintSummary}</b>${pendingSprint ? nextRound(pendingSprint) : ''}</span>${isHost ? '<button type="button" class="icon-button" id="sprint-settings-button" aria-label="房間設定" aria-haspopup="dialog">⚙</button>' : ''}</p>`;
   // Board size, visibility and password are edited in #sprint-dialog; the panel
   // only shows the resulting state and carries it for syncRoomDialog().
-  const roomSettings = room.status === 'lobby'
-    ? `<p class="sprint-setting room-summary readonly" data-room-size="${room.puzzle.size}" data-room-visibility="${room.visibility === 'private' ? 'private' : 'public'}" data-room-password="${room.hasPassword ? '1' : ''}" data-room-locked="${room.restartPending ? '1' : ''}" data-room-host="${isHost ? '1' : ''}"><span>棋盤 <b>${room.puzzle.size} × ${room.puzzle.size}</b> · ${room.visibility === 'private' ? '私人房' : '公開房'} · ${room.hasPassword ? '🔒 需要密碼' : '無密碼'}</span></p>`
-    : '';
+  const pendingRoom = pending && [
+    pending.size ? `${pending.size} × ${pending.size}` : '',
+    pending.visibility ? (pending.visibility === 'private' ? '私人房' : '公開房') : '',
+    pending.password === 'set' ? '新密碼' : pending.password === 'cleared' ? '取消密碼' : ''
+  ].filter(Boolean).join(' · ');
+  const roomSettings = `<p class="sprint-setting room-summary readonly" data-room-size="${pending?.size || room.puzzle.size}" data-room-visibility="${(pending?.visibility || room.visibility) === 'private' ? 'private' : 'public'}" data-room-password="${room.hasPassword ? '1' : ''}" data-room-locked="${room.restartPending ? '1' : ''}" data-room-host="${isHost ? '1' : ''}"><span>棋盤 <b>${room.puzzle.size} × ${room.puzzle.size}</b> · ${room.visibility === 'private' ? '私人房' : '公開房'} · ${room.hasPassword ? '🔒 需要密碼' : '無密碼'}${pendingRoom ? nextRound(pendingRoom) : ''}</span></p>`;
   const streak = entry => entry.streak >= 2 ? ` <em class="streak">🔥 連霸 ${entry.streak}</em>` : '';
+  // Room rows only carry a playerId, so the account behind a name comes from
+  // the roster; people who already left stay plain text.
+  const usernameOf = playerId => room.players.find(player => player.id === playerId)?.username || null;
   const boardTabs = `<div class="board-tabs"><button class="link-button ${state.boardView === 'fastest' ? 'active' : ''}" data-board-view="fastest">最快紀錄</button><button class="link-button ${state.boardView === 'points' ? 'active' : ''}" data-board-view="points">積分榜</button></div>`;
   const leaderboard = state.boardView === 'points'
     ? room.stats?.length
-      ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間積分榜</h3>${boardTabs}<ol>${room.stats.map(row => `<li>${avatarHtml(row.avatar, row.frame, 'small')}<strong>${escapeHtml(row.name)}${streak(row)}</strong><span>${row.points} 分 · 完成 ${row.completed} / ${row.played} 局${row.averageMs != null ? ` · 平均 ${(row.averageMs / 1000).toFixed(1)}s` : ''}${row.bestStreak >= 2 ? ` · 最長連霸 ${row.bestStreak}` : ''}</span></li>`).join('')}</ol><small class="points-rule">完成得 N − 名次 + 1 分（N 為該局玩家數），未完成 0 分。</small></div>`
+      ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間積分榜</h3>${boardTabs}<ol>${room.stats.map(row => `<li>${avatarHtml(row.avatar, row.frame, 'small')}<strong>${roomNameLink(row.name, usernameOf(row.playerId))}${streak(row)}</strong><span>${row.points} 分 · 完成 ${row.completed} / ${row.played} 局${row.averageMs != null ? ` · 平均 ${(row.averageMs / 1000).toFixed(1)}s` : ''}${row.bestStreak >= 2 ? ` · 最長連霸 ${row.bestStreak}` : ''}</span></li>`).join('')}</ol><small class="points-rule">完成得 N − 名次 + 1 分（N 為該局玩家數），未完成 0 分。</small></div>`
       : `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間積分榜</h3>${boardTabs}<p class="empty">每局結束後累計積分：完成得 N − 名次 + 1 分，未完成 0 分。</p></div>`
     : room.leaderboard?.length
-      ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3>${boardTabs}<ol>${room.leaderboard.map(row => `<li>${avatarHtml(row.avatar, row.frame, 'small')}<strong>${escapeHtml(row.name)}</strong><span>${(row.ms / 1000).toFixed(1)}s · ${row.wins} 勝 · 第 ${row.round} 局</span></li>`).join('')}</ol></div>`
+      ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3>${boardTabs}<ol>${room.leaderboard.map(row => `<li>${avatarHtml(row.avatar, row.frame, 'small')}<strong>${roomNameLink(row.name, usernameOf(row.playerId))}</strong><span>${(row.ms / 1000).toFixed(1)}s · ${row.wins} 勝 · 第 ${row.round} 局</span></li>`).join('')}</ol></div>`
       : `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3>${boardTabs}<p class="empty">完成一局後，最快紀錄會出現在這裡。</p></div>`;
-  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; const stat = room.stats?.find(entry => entry.playerId === player.id); const kick = isHost && player.id !== state.playerId ? `<button class="kick-button" data-kick="${escapeHtml(player.id)}" title="移出房間" aria-label="移出 ${escapeHtml(player.name)}">移出</button>` : ''; // Opened in a new tab so reading someone's page never pulls you out of a live match.
-      const page = player.username ? `<a class="profile-link" href="#/u/${encodeURIComponent(player.username)}" target="_blank" rel="noopener" title="看 ${escapeHtml(player.name)} 的個人頁" aria-label="看 ${escapeHtml(player.name)} 的個人頁">主頁</a>` : ''; return `<div class="person-row"><button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span>${avatarHtml(player.avatar, player.frame, 'small')}<strong>${escapeHtml(player.name)}${player.id === state.playerId ? '（你）' : ''}${stat ? streak(stat) : ''}</strong><small class="player-progress">${status}${stat ? ` · ${stat.points} 分` : ''}</small></button>${page}${kick}</div>`; }).join('')}</div>${roleToggle}${roomSettings}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? `<button class="primary wide" id="start-room" ${room.restartPending ? 'disabled' : ''}>開始這局</button>` : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>` : ''}${replay}${blocked}${leaderboard}${exportMap}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `${player.found}/${room.puzzle.size}` : '已淘汰'; const stat = room.stats?.find(entry => entry.playerId === player.id); const kick = isHost && player.id !== state.playerId ? `<button class="kick-button" data-kick="${escapeHtml(player.id)}" title="移出房間" aria-label="移出 ${escapeHtml(player.name)}">移出</button>` : '';
+      // The host wears a crown and you wear a green ring; neither needs a word.
+      const badges = `small${player.host ? ' crowned' : ''}${player.id === state.playerId ? ' is-me' : ''}`;
+      return `<div class="person-row ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}"><button class="person" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}${player.host ? ' title="房主"' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span>${avatarHtml(player.avatar, player.frame, badges)}</button><span class="person-id"><strong>${roomNameLink(player.name, player.username)}${stat ? streak(stat) : ''}</strong><small class="player-progress">${status}${stat ? ` · ${stat.points} 分` : ''}</small></span>${kick}</div>`; }).join('')}</div>${roleToggle}${roomSettings}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? `<button class="primary wide compact" id="start-room" ${room.restartPending ? 'disabled' : ''}>開始這局</button>` : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>` : ''}${replay}${blocked}${leaderboard}${exportMap}<button class="copy-button compact" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
 }
 function renderChatPanel() {
   return `<aside class="chat-panel"><div><p class="eyebrow">ROOM CHAT</p><h2>房間聊天</h2></div><div class="chat-log" id="chat-log"></div><form class="chat-form" id="chat-form"><textarea id="chat-input" rows="1" maxlength="200" placeholder="跟大家說點什麼…"></textarea><button class="primary" type="submit">送出</button></form><small class="chat-notice" id="chat-notice"></small></aside>`;
@@ -822,7 +847,11 @@ function syncRoomDialog() {
   const password = document.querySelector('#room-password');
   password.placeholder = hasPassword ? '已設定，輸入以替換' : '未設定';
   document.querySelector('#room-password-clear').hidden = !hasPassword;
-  document.querySelector('#room-settings-note').textContent = locked ? '新題目正在產生，稍後才能再改大小。' : '改大小會重新產題；密碼最長 32 字，伺服器只保存雜湊。';
+  document.querySelector('#room-settings-note').textContent = locked
+    ? '新題目正在產生，稍後才能再改大小。'
+    : state.room?.status === 'lobby'
+      ? '改大小會重新產題；密碼最長 32 字，伺服器只保存雜湊。'
+      : '局中也可以改，但改動只套用到下一局；密碼最長 32 字，伺服器只保存雜湊。';
 }
 function bindRoomDialog() {
   const updateSettings = (payload, done) => socket.emit('update-room-settings', { code: state.room.code, ...payload }, result => { if (result?.error) alert(result.error); done?.(result); });
@@ -864,7 +893,7 @@ function bindTooltips() {
 function bindSprintDialog() {
   document.querySelector('#sprint-mode')?.addEventListener('change', event => { const mode = event.target.value; document.querySelector('#sprint-group').dataset.mode = mode; socket.emit('set-sprint-setting', { code: state.room.code, mode, value: mode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds }, result => result?.error && alert(result.error)); });
   document.querySelector('#sprint-value')?.addEventListener('input', event => { const mode = document.querySelector('#sprint-mode')?.value; event.target.value = mode === 'multiply' ? event.target.value.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1') : event.target.value.replace(/\D/g, ''); });
-  document.querySelector('#sprint-value')?.addEventListener('change', event => { const mode = document.querySelector('#sprint-mode')?.value || 'fixed'; socket.emit('set-sprint-setting', { code: state.room.code, mode, value: event.target.value }, result => { result?.error && alert(result.error); const stored = state.room.sprintMode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds; event.target.value = stored; }); });
+  document.querySelector('#sprint-value')?.addEventListener('change', event => { const mode = document.querySelector('#sprint-mode')?.value || 'fixed'; socket.emit('set-sprint-setting', { code: state.room.code, mode, value: event.target.value }, result => { if (!result?.error) return syncSprintDialog(); alert(result.error); event.target.value = state.room.sprintMode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds; }); });
 }
 function exitRoom(message) {
   state.room = null; state.resumeCode = null; state.connectionLost = false; state.watchingPlayerId = null;
@@ -874,7 +903,7 @@ function exitRoom(message) {
 }
 function leaveRoom() {
   state.resumeCode = null;
-  const quit = () => { socket.disconnect(); window.location.reload(); };
+  const quit = () => { socket.disconnect(); window.location.assign('/'); };
   // The reload must not outrun the leave packet, but a dead socket never acks.
   const fallback = setTimeout(quit, 600);
   socket.emit('leave-room', { code: state.room.code }, () => { clearTimeout(fallback); quit(); });
@@ -882,6 +911,7 @@ function leaveRoom() {
 
 socket.on('room-state', room => {
   state.room = room; state.mode = 'multi';
+  navigate(`/multi/${room.code}`, { replace: currentRoute().name === 'multi' });
   const me = room.players.find(player => player.id === state.playerId);
   if (me && !me.spectator) state.idleNotice = '';
   const canWatch = me?.spectator || me?.alive === false || me?.completedAt;
@@ -950,23 +980,52 @@ function showAchievementToast(list) {
   window.playSfx?.('meow');
 }
 
-// #/u/<帳號> is the shareable address of a page, and the hash is the only
-// renderer so the browser's back button walks between pages by itself.
-const PROFILE_ROUTE = /^#\/u\/([A-Za-z0-9_-]{1,32})$/;
-const profileRoute = () => PROFILE_ROUTE.exec(location.hash)?.[1] || null;
-function openProfile(username = null) {
-  const hash = username ? `#/u/${username}` : '';
-  if ((location.hash || '') === hash) return showProfile(username);
-  location.hash = hash;
+// Every page has a real address — /single/<關卡>, /multi/<房號>,
+// /profile/<帳號> — so links are shareable and the back button walks between
+// pages by itself. The server serves index.html for all three.
+const ROUTES = [
+  ['profile', /^\/profile(?:\/([A-Za-z0-9_-]{1,32}))?\/?$/],
+  ['single', /^\/single\/([A-Za-z0-9_-]{1,64})\/?$/],
+  ['multi', /^\/multi\/([A-Za-z0-9]{1,8})\/?$/]
+];
+function currentRoute() {
+  for (const [name, pattern] of ROUTES) {
+    const match = pattern.exec(location.pathname);
+    if (match) return { name, param: match[1] || null };
+  }
+  return { name: 'home', param: null };
 }
-window.addEventListener('hashchange', () => {
-  const username = profileRoute();
-  if (username) showProfile(username);
-  else if (state.mode === 'profile') home();
-});
+function navigate(path, { replace = false } = {}) {
+  if (location.pathname === path) return;
+  history[replace ? 'replaceState' : 'pushState']({}, '', path);
+}
+function openProfile(username = null) {
+  navigate(username ? `/profile/${username}` : '/profile');
+  showProfile(username);
+}
+// The address is the source of truth: whatever it says, render it.
+function applyRoute() {
+  const { name, param } = currentRoute();
+  if (name === 'profile') return showProfile(param);
+  if (name === 'single') return startSingle(param);
+  if (name === 'multi') {
+    if (state.room?.code === param) return renderGame();
+    return joinRoom({ code: param, spectator: false });
+  }
+  // Walking back out of a room means leaving it, not just repainting.
+  if (state.room) return leaveRoom();
+  return home();
+}
+window.addEventListener('popstate', () => applyRoute());
+// The old shareable links were hash based; keep them working.
+if (/^#\/u\//.test(location.hash)) {
+  const username = location.hash.slice(4).replace(/\/$/, '');
+  history.replaceState({}, '', /^[A-Za-z0-9_-]{1,32}$/.test(username) ? `/profile/${username}` : '/');
+}
 
 async function showProfile(username = null) {
   const own = !username || username === state.user?.username;
+  navigate(username ? `/profile/${username}` : state.user ? `/profile/${state.user.username}` : '/profile');
   state.mode = 'profile'; state.room = null; state.practice = null;
   const back = '<button class="back-button" id="back">← 首頁</button>';
   if (!own) return showPublicProfile(username, back);
@@ -1039,7 +1098,7 @@ async function showPublicProfile(username, back) {
     </section></div></div>`;
   document.querySelector('#back').onclick = home;
   document.querySelector('#copy-profile-link').onclick = async () => {
-    const link = `${location.origin}${location.pathname}#/u/${profile.user.username}`;
+    const link = `${location.origin}/profile/${profile.user.username}`;
     try { await navigator.clipboard.writeText(link); document.querySelector('#profile-message').textContent = '已複製連結'; }
     catch { document.querySelector('#profile-message').textContent = link; }
   };
@@ -1056,7 +1115,4 @@ function showFinishNotice(results) {
   notice.querySelector('button').addEventListener('click', () => notice.remove());
   document.body.append(notice);
 }
-loadIdentity().then(() => socket.connect(), () => socket.connect()).finally(() => {
-  const username = profileRoute();
-  if (username) showProfile(username); else home();
-});
+loadIdentity().then(() => socket.connect(), () => socket.connect()).finally(() => applyRoute());

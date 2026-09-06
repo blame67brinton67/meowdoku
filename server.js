@@ -536,7 +536,7 @@ function compactRoom(room) {
       // The answer rides along once play starts so eliminated players can export the map; cheating is not a concern here.
       ? { ...publicLevel(room.puzzle), solution: room.puzzle.solution }
       : { id: room.puzzle.id, name: room.puzzle.name, size: room.puzzle.size },
-    countdownEnds: room.countdownEnds, deadline: room.deadline, sprintMode: room.sprintMode, sprintSeconds: room.sprintSeconds, sprintFactor: room.sprintFactor,
+    countdownEnds: room.countdownEnds, deadline: room.deadline, sprintMode: room.sprintMode, sprintSeconds: room.sprintSeconds, sprintFactor: room.sprintFactor, pending: pendingSummary(room),
     leaderboard: leaderboardRows(room), stats: statsRows(room), kicked: [...room.kicked.values()],
     players: [...room.players.values()].map(player => ({
       id: player.id, name: player.name, username: player.username, avatar: player.avatar, frame: player.frame, host: player.id === room.hostId, spectator: player.spectator, idle: player.idle, alive: player.alive,
@@ -671,6 +671,32 @@ function removePlayer(room, player) {
 }
 // Aborting a live round is the host's call, so nothing from it may stick:
 // no points, no fastest record, no history.
+// The host may open the settings at any time, but a change made while a round
+// is alive is queued: nobody's board, sprint or password prompt is allowed to
+// move under them. resetRound() drains the queue for the round that follows.
+function queueSettings(room, changes) {
+  room.pending = { ...room.pending, ...changes };
+}
+function pendingSummary(room) {
+  const pending = room.pending;
+  if (!pending) return null;
+  return {
+    size: pending.size ?? null, visibility: pending.visibility ?? null,
+    // The hash never leaves the server; the panel only needs to know it changed.
+    password: 'password' in pending ? (pending.password ? 'set' : 'cleared') : null,
+    sprintMode: pending.sprintMode ?? null, sprintSeconds: pending.sprintSeconds ?? null, sprintFactor: pending.sprintFactor ?? null
+  };
+}
+// Returns the size the next round must be generated at, or null to keep the
+// current one.
+function drainSettings(room) {
+  const pending = room.pending;
+  room.pending = null;
+  if (!pending) return null;
+  const { size, ...rest } = pending;
+  Object.assign(room, rest);
+  return size && size !== room.puzzle.size ? size : null;
+}
 function resetRound(room) {
   const aborted = room.status === 'countdown' || room.status === 'playing';
   clearTimeout(room.timer); clearTimeout(room.countdownTimer); room.timer = null; room.countdownTimer = null;
@@ -716,12 +742,27 @@ io.on('connection', socket => {
     joinRoom(socket, room, { playerId, kind, spectator: Boolean(spectator) || room.status !== 'lobby' });
     callback({ ok: true, spectator: room.status !== 'lobby' || Boolean(spectator) });
   });
-  socket.on('start-game', ({ code } = {}, callback) => {
+  socket.on('start-game', async ({ code } = {}, callback) => {
     const room = rooms.get(code);
     if (!room || room.hostId !== playerId) return callback?.({ error: '只有房主可以開始' });
     if (room.status !== 'lobby') return callback?.({ error: '遊戲已開始' });
     if (room.restartPending) return callback?.({ error: '新題目還在準備中，請稍候' });
     if (![...room.players.values()].some(player => !player.spectator)) return callback?.({ error: '至少需要一位玩家' });
+    // Whichever action opens the next round is the one that applies the
+    // settings queued during the last one.
+    const nextSize = drainSettings(room);
+    if (nextSize) {
+      room.restartPending = true; emitRoom(room);
+      try {
+        const puzzle = await generateAsync(nextSize);
+        if (rooms.get(code) !== room || room.status !== 'lobby') return callback?.({ error: '房間狀態已改變，請重新操作' });
+        room.puzzle = puzzle;
+        io.to(room.code).emit('room-restarted', { message: `房主把棋盤改成 ${nextSize} × ${nextSize}，已換上新題目。` });
+      // A board we could not generate stays queued, so the host's choice is
+      // not silently thrown away.
+      } catch (error) { queueSettings(room, { size: nextSize }); return callback?.({ error: error.message }); }
+      finally { room.restartPending = false; if (rooms.get(code) === room) emitRoom(room); }
+    }
     room.status = 'countdown'; room.countdownEnds = Date.now() + 3000; emitRoom(room);
     room.countdownTimer = setTimeout(() => {
       room.countdownTimer = null; room.status = 'playing'; room.startedAt = Date.now(); room.countdownEnds = null;
@@ -788,27 +829,26 @@ io.on('connection', socket => {
   socket.on('set-sprint-setting', ({ code, mode, value } = {}, callback) => {
     const room = rooms.get(code);
     if (!room || room.hostId !== playerId) return callback?.({ error: '只有房主可以調整最後衝刺時間' });
-    if (room.status !== 'lobby') return callback?.({ error: '倒數開始後不能再調整最後衝刺時間' });
     const nextMode = normalizeSprintMode(mode);
     if (!nextMode) return callback?.({ error: '最後衝刺模式不正確' });
+    const changes = { sprintMode: nextMode };
     if (nextMode === 'multiply') {
       const factor = clampSprintFactor(value, null);
       if (factor === null) return callback?.({ error: '請輸入有效的倍數（0.1 – 9999）' });
-      room.sprintFactor = factor;
+      changes.sprintFactor = factor;
     } else {
       const seconds = clampSprintSeconds(value, null);
       if (seconds === null) return callback?.({ error: '請輸入有效的秒數（1 – 9999）' });
-      room.sprintSeconds = seconds;
+      changes.sprintSeconds = seconds;
     }
-    room.sprintMode = nextMode;
-    emitRoom(room); callback?.({ ok: true });
+    if (room.status === 'lobby') Object.assign(room, changes); else queueSettings(room, changes);
+    emitRoom(room); callback?.({ ok: true, pending: room.status !== 'lobby' });
   });
   // Every change is validated (and the new puzzle generated) before anything
   // is applied, so a failure leaves the room exactly as it was.
   socket.on('update-room-settings', async ({ code, size, password, clearPassword, visibility } = {}, callback) => {
     const room = rooms.get(code), host = hostBySocket(room, socket);
     if (!host) return callback?.({ error: '只有房主可以調整房間設定' });
-    if (room.status !== 'lobby') return callback?.({ error: '倒數開始後不能再調整房間設定' });
     if (room.restartPending) return callback?.({ error: '新題目還在準備中，請稍候' });
     const changes = {};
     if (visibility !== undefined) {
@@ -827,6 +867,13 @@ io.on('connection', socket => {
     if (size !== undefined) {
       if (!Number.isFinite(Number(size))) return callback?.({ error: '棋盤大小不正確' });
       nextSize = clampSize(size);
+    }
+    // Mid-round the whole change waits for the next round, board size included,
+    // so no live player is handed a different puzzle.
+    if (room.status !== 'lobby') {
+      queueSettings(room, nextSize === null ? changes : { ...changes, size: nextSize });
+      emitRoom(room);
+      return callback?.({ ok: true, pending: true });
     }
     if (nextSize === null || nextSize === room.puzzle.size) {
       if (rooms.get(code) !== room || room.status !== 'lobby') return callback?.({ error: '房間狀態已改變，請重新操作' });
@@ -870,14 +917,15 @@ io.on('connection', socket => {
     if (room.restartPending) return callback?.({ error: '正在準備下一局，請稍候' });
     room.restartPending = true;
     const aborted = resetRound(room);
+    const nextSize = drainSettings(room);
     emitRoom(room); checkAllSpectator(room);
     if (aborted) io.to(room.code).emit('room-restarted', { message: '房主重開了這一局，本局不計分。' });
     try {
-      const puzzle = await generateAsync(room.puzzle.size);
+      const puzzle = await generateAsync(nextSize || room.puzzle.size);
       if (rooms.get(code) !== room) return callback?.({ error: '房間已關閉' });
       room.puzzle = puzzle; room.round++;
       callback?.({ ok: true });
-    } catch (error) { callback?.({ error: error.message }); }
+    } catch (error) { if (nextSize) queueSettings(room, { size: nextSize }); callback?.({ error: error.message }); }
     finally { room.restartPending = false; if (rooms.get(code) === room) emitRoom(room); }
   });
   socket.on('resume-room', async ({ code, password } = {}, callback) => {
@@ -937,6 +985,12 @@ function joinRoom(socket, room, { playerId, kind, spectator }) {
   room.players.set(playerId, player); socket.join(room.code); socket.emit('chat-backlog', room.chat); emitRoom(room); checkAllSpectator(room);
   if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
 }
+
+// The client routes /single/<id>, /multi/<code> and /profile/<user> itself, so
+// a deep link (or a refresh on one) has to be served the same page.
+app.get(['/single/:id', '/multi/:code', '/profile', '/profile/:username'], (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 // Unref'd so a test process that required this module can still exit.
 setInterval(() => sweepRooms(), ROOM_SWEEP_INTERVAL).unref();

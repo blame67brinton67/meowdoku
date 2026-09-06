@@ -241,8 +241,23 @@ test('room settings: host only, lobby only, size clamped, failure leaves state i
   assert.equal((await emit(a, 'update-room-settings', { code, size: 1 })).ok, true);
   assert.equal(room(code).puzzle.size, 4);
   await startMatch(code, a, aId);
-  assert.match((await emit(a, 'update-room-settings', { code, visibility: 'public' })).error, /倒數/);
+  // Mid-round the host still edits freely, but the round underway keeps its own
+  // settings until the next one opens.
+  assert.equal((await emit(a, 'update-room-settings', { code, visibility: 'public', size: 5 })).pending, true);
   assert.equal(room(code).visibility, 'private');
+  assert.equal(room(code).puzzle.size, 4);
+  assert.equal((await emit(a, 'restart-room', { code })).ok, true);
+  assert.equal(room(code).visibility, 'public');
+  assert.equal(room(code).puzzle.size, 5);
+});
+
+test('a sprint change made mid-round only lands on the round the host starts next', async () => {
+  const { code, sockets: [a], ids: [aId] } = await makeRoom(['a']);
+  await startMatch(code, a, aId);
+  assert.equal((await emit(a, 'set-sprint-setting', { code, mode: 'fixed', value: 5 })).pending, true);
+  assert.equal(room(code).sprintSeconds, 60);
+  assert.equal((await emit(a, 'restart-room', { code })).ok, true);
+  assert.equal(room(code).sprintSeconds, 5);
 });
 
 test('room password gates joining and never leaves the server', async () => {
@@ -357,4 +372,13 @@ test('the sweep reaps a room nobody is connected to, and leaves a live one alone
   assert.equal((await closed).reason, '房間閒置太久，已自動關閉');
   assert.equal(room(idle.code), undefined);
   for (const socket of [...sockets, ...idle.sockets]) socket.disconnect();
+});
+
+test('deep links to a page are served the app, unknown paths are not', async () => {
+  for (const path of ['/single/lvl-1', '/multi/ABCD', '/profile/catone', '/profile']) {
+    const response = await fetch(`${url}${path}`);
+    assert.equal(response.status, 200, path);
+    assert.match(await response.text(), /<div id="view">|id="view"/);
+  }
+  assert.equal((await fetch(`${url}/nope/nope`)).status, 404);
 });
