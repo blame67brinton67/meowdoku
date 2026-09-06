@@ -329,6 +329,33 @@ test('eliminated player receives the answer in the room payload while others sti
   assert.doesNotMatch(JSON.stringify(compactRoom({ ...room(code), status: 'lobby' })), /solution|regions/);
 });
 
+test('an ordinary guess travels as a counter, not as a room state', async () => {
+  const { code, sockets: [host, guest], ids: [hostId] } = await makeRoom(['host', 'guest']);
+  await startMatch(code, host, hostId);
+  const progress = once(guest, 'room-progress');
+  const stale = once(guest, 'room-state').then(() => 'room-state');
+  const [cat] = room(code).puzzle.solution;
+  host.emit('guess', { code, row: cat.row, col: cat.col });
+  assert.deepEqual((await progress).found.find(([id]) => id === hostId), [hostId, 1]);
+  assert.equal(await Promise.race([stale, sleep(120).then(() => 'nothing')]), 'nothing');
+  // Anyone who somehow lacks the board can still ask for the whole thing.
+  const refreshed = once(guest, 'room-state');
+  guest.emit('room-refresh', { code });
+  assert.ok(Array.isArray((await refreshed).puzzle.regions));
+});
+
+test('a watched room still broadcasts the boards being watched', async () => {
+  const { code, sockets: [host, guest, third], ids: [hostId, guestId] } = await makeRoom(['host', 'guest', 'third']);
+  await startMatch(code, host, hostId);
+  await eliminate(code, guest, guestId);
+  await sleep(120);
+  const state = once(third, 'room-state');
+  const [cat] = room(code).puzzle.solution;
+  host.emit('guess', { code, row: cat.row, col: cat.col });
+  const payload = await state;
+  assert.deepEqual(payload.players.find(player => player.id === hostId).cats, [`${cat.row}:${cat.col}`]);
+});
+
 test('roles can change once everyone is done, never mid-round, without touching points', async () => {
   const { code, sockets: [host, guest, third], ids: [hostId, guestId, thirdId] } = await makeRoom(['host', 'guest', 'third']);
   await startMatch(code, host, hostId);

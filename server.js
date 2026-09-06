@@ -529,20 +529,31 @@ function statsRows(room) {
   return [...room.stats.values()].map(entry => ({ ...entry, averageMs: entry.completed ? Math.round(entry.totalMs / entry.completed) : null }))
     .sort((a, b) => b.points - a.points || (a.averageMs ?? Infinity) - (b.averageMs ?? Infinity) || a.playerId.localeCompare(b.playerId));
 }
-function compactRoom(room) {
+// A guess or a pencil mark changes one cell, so the states that carry them
+// leave out everything that cannot have changed: the round's board (identical
+// for the whole round) and the other players' boards (nobody can look at them
+// while everyone is still racing). Only that trims a 12 x 12 six-player state
+// from ~3.8 KB to ~1.2 KB, twenty times a second, for every member.
+function boardsWatchable(room) {
+  return room.status === 'finished'
+    || [...room.players.values()].some(player => player.spectator || player.alive === false || player.completedAt);
+}
+function compactRoom(room, { full = true } = {}) {
+  const boards = full || boardsWatchable(room);
+  const lightPuzzle = { id: room.puzzle.id, name: room.puzzle.name, size: room.puzzle.size };
   return {
     code: room.code, name: room.name, status: room.status, hostId: room.hostId, visibility: room.visibility, restartPending: Boolean(room.restartPending), hasPassword: Boolean(room.password),
     // Do not reveal the region arrangement to waiting players or spectators.
-    puzzle: room.status === 'playing' || room.status === 'finished'
+    puzzle: !full ? lightPuzzle : room.status === 'playing' || room.status === 'finished'
       // The answer rides along once play starts so eliminated players can export the map; cheating is not a concern here.
       ? { ...publicLevel(room.puzzle), solution: room.puzzle.solution }
-      : { id: room.puzzle.id, name: room.puzzle.name, size: room.puzzle.size },
+      : lightPuzzle,
     countdownEnds: room.countdownEnds, deadline: room.deadline, sprintMode: room.sprintMode, sprintSeconds: room.sprintSeconds, sprintFactor: room.sprintFactor, pending: pendingSummary(room),
     leaderboard: leaderboardRows(room), stats: statsRows(room), kicked: [...room.kicked.values()],
     players: [...room.players.values()].map(player => ({
       id: player.id, name: player.name, username: player.username, avatar: player.avatar, frame: player.frame, host: player.id === room.hostId, spectator: player.spectator, idle: player.idle, alive: player.alive,
       found: player.found.size, completedAt: player.completedAt,
-      cats: [...player.found], marks: [...player.marks], wrong: [...player.wrong]
+      ...(boards ? { cats: [...player.found], marks: [...player.marks], wrong: [...player.wrong] } : null)
     }))
   };
 }
@@ -550,14 +561,32 @@ function compactRoom(room) {
 // and pencil marks — are coalesced into at most one broadcast per interval
 // instead of one per keystroke. Lifecycle changes still go out at once.
 const ROOM_BROADCAST_INTERVAL = 50;
+// Nobody is waiting on someone else's pencil marks, so they travel slower than
+// guesses instead of pinning the room at one broadcast every 50 ms.
+const MARKS_BROADCAST_INTERVAL = 250;
 function emitRoom(room) {
   clearTimeout(room.broadcastTimer); room.broadcastTimer = null;
+  clearTimeout(room.progressTimer); room.progressTimer = null;
   room.lastBroadcast = room.lastActiveAt = Date.now();
   io.to(room.code).emit('room-state', compactRoom(room));
 }
-function emitRoomSoon(room) {
+function emitRoomSoon(room, interval = ROOM_BROADCAST_INTERVAL) {
   if (room.broadcastTimer) return;
-  room.broadcastTimer = setTimeout(() => emitRoom(room), Math.max(0, ROOM_BROADCAST_INTERVAL - (Date.now() - (room.lastBroadcast || 0))));
+  room.broadcastTimer = setTimeout(() => {
+    room.broadcastTimer = null;
+    room.lastBroadcast = room.lastActiveAt = Date.now();
+    io.to(room.code).emit('room-state', compactRoom(room, { full: false }));
+  }, Math.max(0, interval - (Date.now() - (room.lastBroadcast || 0))));
+}
+// While everyone is still racing, a correct click changes exactly one number
+// in everybody's roster, so it travels as that number rather than as a room
+// state: ~60 bytes instead of ~1.4 KB, and the client repaints one line.
+function emitProgressSoon(room) {
+  if (room.progressTimer || room.broadcastTimer) return;
+  room.progressTimer = setTimeout(() => {
+    room.progressTimer = null; room.lastActiveAt = Date.now();
+    io.to(room.code).emit('room-progress', { code: room.code, found: racers(room).map(player => [player.id, player.found.size]) });
+  }, ROOM_BROADCAST_INTERVAL);
 }
 function racers(room) { return [...room.players.values()].filter(p => !p.spectator); }
 // Payload ids are client-supplied, so host-only actions are attributed to the
@@ -571,7 +600,7 @@ function reassignHost(room) {
   room.hostId = (people.find(p => p.socketId && !p.spectator) || people.find(p => p.socketId) || people[0])?.id || null;
 }
 function closeRoom(room, reason) {
-  clearTimeout(room.timer); clearTimeout(room.countdownTimer); clearTimeout(room.broadcastTimer); clearTimeout(room.spectatorTimer);
+  clearTimeout(room.timer); clearTimeout(room.countdownTimer); clearTimeout(room.broadcastTimer); clearTimeout(room.progressTimer); clearTimeout(room.spectatorTimer);
   for (const player of room.players.values()) clearTimeout(player.idleTimer);
   rooms.delete(room.code);
   if (reason) io.to(room.code).emit('room-closed', { reason });
@@ -776,11 +805,14 @@ io.on('connection', socket => {
     if (!hit) {
       player.alive = false; player.wrong.add(`${row}:${col}`);
       socket.emit('guess-result', { row, col, hit: false }); io.to(room.code).emit('player-eliminated', { playerId, row, col });
-      if (allPlayersResolved(room)) finishRoom(room); else emitRoomSoon(room);
+      // Being out of the race is a lifecycle change: it hands this player the
+      // map to export and lets everyone watch, so the whole state goes out.
+      if (allPlayersResolved(room)) finishRoom(room); else emitRoom(room);
       return;
     }
     player.found.add(`${row}:${col}`); socket.emit('guess-result', { row, col, hit: true });
-    if (player.found.size === room.puzzle.size) {
+    const done = player.found.size === room.puzzle.size;
+    if (done) {
       player.completedAt = Date.now();
       room.leaderboard.push({ playerId: player.id, name: player.name, avatar: player.avatar, frame: player.frame, ms: player.completedAt - room.startedAt, at: player.completedAt, round: room.round, won: !room.leaderboard.some(record => record.round === room.round && record.won) });
       if (room.leaderboard.length > 200) room.leaderboard.splice(0, room.leaderboard.length - 200);
@@ -793,13 +825,21 @@ io.on('connection', socket => {
         io.to(room.code).emit('final-sprint', { deadline: room.deadline, sprintSeconds });
       }
     }
-    emitRoomSoon(room);
+    if (done) emitRoom(room);
+    else if (boardsWatchable(room)) emitRoomSoon(room);
+    else emitProgressSoon(room);
   });
   socket.on('marks-update', ({ code, marks } = {}) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
     if (!room || !player || room.status !== 'playing' || player.spectator || !player.alive || !Array.isArray(marks)) return;
     player.marks = new Set(marks.filter(key => typeof key === 'string').slice(0, room.puzzle.size * room.puzzle.size));
-    emitRoomSoon(room);
+    if (boardsWatchable(room)) emitRoomSoon(room, MARKS_BROADCAST_INTERVAL);
+  });
+  // A client that only ever saw light states asks for the whole thing once,
+  // e.g. after it starts watching somebody or reconnects into a live round.
+  socket.on('room-refresh', ({ code } = {}) => {
+    const room = rooms.get(code);
+    if (room?.players.get(playerId)) emitRoom(room);
   });
   socket.on('chat-message', ({ code, text } = {}, callback) => {
     const room = rooms.get(code), player = room?.players.get(playerId);
