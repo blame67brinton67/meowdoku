@@ -536,6 +536,7 @@ function bindPracticeButtons() {
   document.querySelector('#practice-again')?.addEventListener('click', () => startPractice(state.practice));
   document.querySelector('#practice-back')?.addEventListener('click', showHistory);
 }
+const PANEL_SCROLLERS = ['.people', '.room-leaderboard ol', '.leaderboard ol'];
 function patchGame(puzzle, room, me, isViewing, message) {
   document.querySelector('.game-status').innerHTML = `${statusBar(puzzle, room, me)}<span id="game-message">${message}</span>`;
   patchBoard(viewedBoard(me, isViewing));
@@ -545,7 +546,16 @@ function patchGame(puzzle, room, me, isViewing, message) {
     // The settings controls live in the static dialog, so a panel rerender
     // cannot disturb what the host is typing there.
     const sprintFocused = document.activeElement?.id === 'sprint-value';
+    // Replacing the panel resets every scrollbar in it, which threw a reader
+    // of the member list back to the top on each broadcast.
+    const offsets = PANEL_SCROLLERS.map(selector => [selector, panel.querySelector(selector)?.scrollTop || 0]);
+    const panelTop = panel.scrollTop;
     panel.outerHTML = html; bindRoomButtons();
+    const fresh = document.querySelector('.room-panel');
+    if (fresh) {
+      fresh.scrollTop = panelTop;
+      for (const [selector, top] of offsets) { const box = fresh.querySelector(selector); if (box && top) box.scrollTop = top; }
+    }
     if (sprintFocused) { const input = document.querySelector('#sprint-value'); input?.focus(); input?.setSelectionRange(input.value.length, input.value.length); }
   }
 }
