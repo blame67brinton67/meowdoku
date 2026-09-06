@@ -228,8 +228,15 @@ bindTooltips(); bindSprintDialog(); bindRoomDialog();
 document.querySelector('#theme-preset-list').innerHTML = BOARD_THEMES.map(preset => `<button type="button" role="radio" aria-checked="false" data-theme-preset="${preset.id}" style="--paper-swatch:${preset.paper}"><span class="preset-swatches">${preset.palette.slice(0, 6).map(color => `<i style="background:${color}"></i>`).join('')}</span>${escapeHtml(preset.name)}</button>`).join('');
 document.querySelectorAll('[data-theme-preset]').forEach(button => button.addEventListener('click', () => applyPreset(BOARD_THEMES.find(preset => preset.id === button.dataset.themePreset))));
 document.querySelectorAll('[data-theme-palette]').forEach(input => input.addEventListener('input', () => { theme.palette[Number(input.dataset.themePalette)] = input.value; saveTheme(); syncThemeInputs(); applyTheme(); }));
-document.querySelectorAll('[data-theme-key]').forEach(input => input.addEventListener('input', () => { theme[input.dataset.themeKey] = input.value; saveTheme(); syncThemeInputs(); applyTheme(); }));
-document.querySelector('#reset-theme').addEventListener('click', () => applyPreset(DEFAULT_THEME));
+// The pickers show the colours the active scheme resolved to, so both are
+// committed before one is edited; otherwise the untouched one would snap back
+// to whatever the other scheme had stored.
+document.querySelectorAll('[data-theme-key]').forEach(input => input.addEventListener('input', () => {
+  const effective = { boardLine: effectiveColor('boardLine'), paper: effectiveColor('paper') };
+  Object.assign(theme, effective, { [input.dataset.themeKey]: input.value });
+  saveTheme(); syncThemeInputs(); applyTheme();
+}));
+document.querySelector('#reset-theme').addEventListener('click', () => applyPreset(BOARD_THEMES[0]));
 document.querySelector('#color-scheme').addEventListener('change', event => { localStorage.meowdokuColorScheme = event.target.value; applyColorScheme(); syncThemeInputs(); queueSettingsSync(); });
 darkQuery.addEventListener('change', () => { if (readColorScheme() === 'system') { applyColorScheme(); syncThemeInputs(); } });
 document.querySelector('#vibrate-toggle').addEventListener('click', () => { localStorage.meowdokuVibrate = vibrateEnabled() ? '0' : '1'; syncVibrateToggle(); queueSettingsSync(); if (vibrateEnabled()) vibrate('cat'); });
