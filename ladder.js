@@ -22,9 +22,33 @@ function triesPerRound(size) {
   return size <= 8 ? 150 : size <= 10 ? 40 : 15;
 }
 const FLAVOURS = ['曬太陽的午後', '滾來滾去的毛球', '謎樣的貓腳印', '深夜的貓步', '傳說中的貓王'];
+// Chapters slice the ladder by position; each chapter also fixes the board
+// sizes its rungs are drawn from.
+const CHAPTERS = [
+  { id: 'kitten', name: '新手貓窩', until: 0.12, sizes: [5, 6] },
+  { id: 'alley', name: '巷口探險', until: 0.3, sizes: [6, 7] },
+  { id: 'rooftop', name: '屋頂漫步', until: 0.5, sizes: [7, 8] },
+  { id: 'midnight', name: '深夜貓步', until: 0.7, sizes: [8, 9] },
+  { id: 'trial', name: '貓王試煉', until: 0.85, sizes: [9, 10] },
+  { id: 'legend', name: '傳說貓王', until: Infinity, sizes: [11, 12] }
+];
+const fractionOf = index => LADDER_LENGTH > 1 ? index / (LADDER_LENGTH - 1) : 0;
+function chapterOf(index) {
+  const fraction = fractionOf(index);
+  return CHAPTERS.find(chapter => fraction < chapter.until);
+}
+// Every chapter with its expected rung count and the rungs built so far, so a
+// chapter only counts as cleared once all of its rungs exist and are cleared.
+function ladderChapters(levels) {
+  return CHAPTERS.map(chapter => ({
+    id: chapter.id, name: chapter.name,
+    total: Array.from({ length: LADDER_LENGTH }, (_, index) => chapterOf(index)).filter(c => c === chapter).length,
+    levelIds: levels.filter(level => Number.isInteger(level.ladderIndex) && chapterOf(level.ladderIndex) === chapter).map(level => level.id)
+  }));
+}
 
 function rung(index, round = 0, previous = 0) {
-  const fraction = LADDER_LENGTH > 1 ? index / (LADDER_LENGTH - 1) : 0;
+  const fraction = fractionOf(index);
   const target = FIRST_TARGET * Math.pow(LAST_TARGET / FIRST_TARGET, fraction);
   // Each fruitless round widens the band; the floor never drops below the rung
   // underneath, so the ladder cannot lose its monotonicity.
@@ -32,7 +56,7 @@ function rung(index, round = 0, previous = 0) {
     target: Math.round(target),
     lo: Math.max(previous + 1, Math.round(target * (0.8 - 0.15 * round))),
     hi: Math.max(previous + 1, Math.round(target * (1.25 + 0.45 * round))),
-    sizes: fraction < 0.12 ? [5, 6] : fraction < 0.3 ? [6, 7] : fraction < 0.5 ? [7, 8] : fraction < 0.7 ? [8, 9] : fraction < 0.85 ? [9, 10] : [11, 12]
+    sizes: chapterOf(index).sizes
   };
 }
 function ratingOf(puzzle) {
@@ -92,4 +116,4 @@ function buildLadder({ levels, generate, makeId, paused, onAccepted, onDone, onP
   setImmediate(tick);
 }
 
-module.exports = { buildLadder, validLadder, ratingOf, rung, LADDER_VERSION, LADDER_LENGTH };
+module.exports = { buildLadder, validLadder, ratingOf, rung, chapterOf, ladderChapters, CHAPTERS, LADDER_VERSION, LADDER_LENGTH };

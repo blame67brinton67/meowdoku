@@ -59,4 +59,13 @@ function generateAsync(size) {
   });
 }
 
-module.exports = { generateAsync };
+// Lets a test process exit once it is done with the server; pending jobs are
+// rejected rather than left dangling.
+function stopWorker() {
+  if (!worker) return Promise.resolve();
+  const instance = worker;
+  failWorker(instance, new Error('題目 worker 已關閉'));
+  return instance.terminate();
+}
+
+module.exports = { generateAsync, stopWorker };
