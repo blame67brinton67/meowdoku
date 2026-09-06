@@ -195,6 +195,10 @@
 .person-row .person { flex: 1; min-width: 0; }
 .kick-button { border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; padding: 3px 8px; white-space: nowrap; }
 .kick-button:hover { border-color: #a9262f; color: #a9262f; }
+.profile-link { display: inline-block; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; text-decoration: none; padding: 3px 8px; white-space: nowrap; }
+.profile-link:hover { border-color: var(--orange); color: var(--orange); }
+.name-link { border: 0; padding: 0; background: none; font: inherit; color: inherit; text-decoration: underline dotted; text-underline-offset: 2px; }
+.name-link:hover { color: var(--orange); text-decoration-style: solid; }
 .streak { font-style: normal; font-size: 11px; color: var(--orange); }
 .board-tabs { display: flex; gap: 12px; margin-bottom: 6px; }
 .board-tabs .link-button { padding: 0; font-size: 12px; color: var(--muted); }

@@ -261,6 +261,36 @@ test('socket identity comes from the cookie and payload playerId is ignored', as
   } finally { for (const socket of sockets) socket.disconnect(); }
 });
 
+test('anyone can read an account page; it carries no private fields and no boards', async () => {
+  const { cookie, user } = await signUp('page_owner');
+  await call('POST', '/api/single-complete', { body: { levelId: LEVEL.id }, cookie });
+  serverAuth.bootstrapAdmin('page_owner');
+  serverAuth.setSettings(user.id, { colorScheme: 'dark' });
+
+  const stranger = await call('GET', '/api/auth/me');
+  const page = await call('GET', '/api/profile/PAGE_OWNER', { cookie: stranger.cookie });
+  assert.equal(page.status, 200, JSON.stringify(page.data));
+  assert.equal(page.data.user.username, 'page_owner');
+  assert.deepEqual(page.data.cleared, [LEVEL.id]);
+  assert.deepEqual(Object.keys(page.data.user).sort(), ['avatar', 'displayName', 'frame', 'id', 'username']);
+  assert.ok(page.data.achievements.some(achievement => achievement.unlockedAt), 'clearing a level shows up');
+  for (const record of page.data.history) assert.deepEqual(Object.keys(record).sort(), ['finishedAt', 'outcome', 'roomName', 'size']);
+
+  assert.equal((await call('GET', '/api/profile/nobody_here')).status, 404);
+  // The private page still needs a session of its own.
+  assert.equal((await call('GET', '/api/profile/me', { cookie: stranger.cookie })).status, 401);
+  const mine = await call('GET', '/api/profile/me', { cookie });
+  assert.equal(mine.data.user.isAdmin, true);
+});
+
+test('the single-player leaderboard links each row to its account page', async () => {
+  const { cookie } = await signUp('linked_user');
+  await call('POST', '/api/single-complete', { body: { levelId: LEVEL.id }, cookie });
+  const board = (await call('GET', '/api/leaderboard')).data;
+  const row = board.top.find(entry => entry.username === 'linked_user');
+  assert.ok(row, 'the row carries the username the page is keyed by');
+});
+
 test('a guest plays multiplayer as 神秘貓奴 and never lands on the leaderboard', async () => {
   const { cookie, user } = await signUp('mystery_host');
   const guest = await call('GET', '/api/auth/me');

@@ -217,7 +217,13 @@ document.querySelector('#auth-form').addEventListener('submit', async event => {
     window.location.reload();
   } catch (error) { message.textContent = error.message; button.disabled = false; }
 });
-document.querySelector('#profile-button').addEventListener('click', showProfile);
+document.querySelector('#profile-button').addEventListener('click', () => openProfile());
+// Every name rendered with data-profile opens that account's page, wherever it
+// appears, so the room list and leaderboards need no handlers of their own.
+document.addEventListener('click', event => {
+  const link = event.target.closest('[data-profile]');
+  if (link) openProfile(link.dataset.profile);
+});
 document.querySelector('#logout-button').addEventListener('click', async () => {
   try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
   window.location.reload();
@@ -346,6 +352,7 @@ document.querySelector('#save-order').addEventListener('click', async () => {
 });
 
 async function home() {
+  if (profileRoute()) history.replaceState(null, '', location.pathname + location.search);
   state.mode = 'home'; state.single = null; state.room = null; state.practice = null; state.cats.clear(); state.marks.clear();
   const [levels, leaderboard, progress] = await Promise.all([api('/api/levels'), api('/api/leaderboard'), api('/api/progress/me')]);
   state.levels = levels; state.cleared = new Set(progress.cleared);
@@ -357,11 +364,17 @@ async function home() {
     <section class="mode-grid"><article class="mode-card solo"><span class="mode-icon">⌁</span><p class="eyebrow">SOLO MODE</p><h2>獨自推理</h2><p>挑一個關卡，慢慢找到唯一的答案。</p><button class="primary" id="open-solo">選擇關卡</button></article>
     <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><div class="mode-actions"><button class="dark-button" id="open-multi">進入多人遊戲</button><button class="link-button" id="open-history">對戰紀錄（重新解題）</button></div></article></section>
     <section class="lower-grid"><article class="panel continue-panel"><div><p class="eyebrow">SINGLE PLAYER</p><h2>接著挑戰</h2><p>${!nextLevel ? '難度階梯正在產生，稍等幾秒再回來。' : nextIndex === -1 ? '所有罐罐都找到了，真是傳奇貓奴。' : '解完前一關，下一盒罐罐正在等你。'}</p></div><div class="continue-level"><span>${continueLabel}</span><strong>${nextLevel ? escapeHtml(nextLevel.name) : '尚未有關卡'}</strong><small>${nextLevel ? `${nextLevel.size} × ${nextLevel.size}` : '貓咪還在畫地圖'}</small>${nextLevel ? ratingLine(nextLevel.rating) : ''}</div><button class="primary" id="continue-solo" ${nextLevel ? '' : 'disabled'}>${nextIndex === -1 ? '再次挑戰 →' : '繼續解題 →'}</button><button class="link-button" id="open-solo-2">查看全部關卡</button></article>
-    <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.top.length ? `<ol>${leaderboard.top.map(entry => `<li class="${entry.me ? 'me' : ''}"><span>${entry.rank}</span>${avatarHtml(entry.avatar, entry.frame, 'small')}<strong>${escapeHtml(entry.name)}${entry.me ? '（你）' : ''}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}${myRankLine(leaderboard)}</article></section></div>`;
+    <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.top.length ? `<ol>${leaderboard.top.map(entry => `<li class="${entry.me ? 'me' : ''}"><span>${entry.rank}</span>${avatarHtml(entry.avatar, entry.frame, 'small')}<strong>${nameLink(entry.name, entry.username)}${entry.me ? '（你）' : ''}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}${myRankLine(leaderboard)}</article></section></div>`;
   document.querySelector('#open-solo').onclick = showLevels; document.querySelector('#open-solo-2').onclick = showLevels;
   document.querySelector('#open-multi').onclick = showMultiplayer;
   document.querySelector('#open-history').onclick = showHistory;
   if (nextLevel) document.querySelector('#continue-solo').onclick = () => startSingle(nextLevel.id);
+}
+// A guest has no page of their own, so only accounts become links.
+function nameLink(name, username) {
+  return username
+    ? `<button type="button" class="name-link" data-profile="${escapeHtml(username)}" title="看 ${escapeHtml(name)} 的個人頁">${escapeHtml(name)}</button>`
+    : escapeHtml(name);
 }
 // The rank comes from the server; a guest is told to sign in rather than
 // shown a number that would vanish with the cookie.
@@ -592,7 +605,8 @@ function renderRoomPanel(room, me) {
     : room.leaderboard?.length
       ? `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3>${boardTabs}<ol>${room.leaderboard.map(row => `<li>${avatarHtml(row.avatar, row.frame, 'small')}<strong>${escapeHtml(row.name)}</strong><span>${(row.ms / 1000).toFixed(1)}s · ${row.wins} 勝 · 第 ${row.round} 局</span></li>`).join('')}</ol></div>`
       : `<div class="room-leaderboard"><p class="eyebrow">LEADERBOARD</p><h3>房間最快紀錄</h3>${boardTabs}<p class="empty">完成一局後，最快紀錄會出現在這裡。</p></div>`;
-  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; const stat = room.stats?.find(entry => entry.playerId === player.id); const kick = isHost && player.id !== state.playerId ? `<button class="kick-button" data-kick="${escapeHtml(player.id)}" title="移出房間" aria-label="移出 ${escapeHtml(player.name)}">移出</button>` : ''; return `<div class="person-row"><button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span>${avatarHtml(player.avatar, player.frame, 'small')}<strong>${escapeHtml(player.name)}${player.id === state.playerId ? '（你）' : ''}${stat ? streak(stat) : ''}</strong><small class="player-progress">${status}${stat ? ` · ${stat.points} 分` : ''}</small></button>${kick}</div>`; }).join('')}</div>${roleToggle}${roomSettings}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? `<button class="primary wide" id="start-room" ${room.restartPending ? 'disabled' : ''}>開始這局</button>` : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>` : ''}${replay}${blocked}${leaderboard}${exportMap}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+  return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const status = player.idle ? '離線觀戰' : player.spectator ? '觀戰' : player.completedAt ? '已完成' : player.alive ? `已解 ${player.found} / ${room.puzzle.size}` : '已淘汰'; const stat = room.stats?.find(entry => entry.playerId === player.id); const kick = isHost && player.id !== state.playerId ? `<button class="kick-button" data-kick="${escapeHtml(player.id)}" title="移出房間" aria-label="移出 ${escapeHtml(player.name)}">移出</button>` : ''; // Opened in a new tab so reading someone's page never pulls you out of a live match.
+      const page = player.username ? `<a class="profile-link" href="#/u/${encodeURIComponent(player.username)}" target="_blank" rel="noopener" title="看 ${escapeHtml(player.name)} 的個人頁" aria-label="看 ${escapeHtml(player.name)} 的個人頁">主頁</a>` : ''; return `<div class="person-row"><button class="person ${player.host ? 'host' : ''} ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span>${avatarHtml(player.avatar, player.frame, 'small')}<strong>${escapeHtml(player.name)}${player.id === state.playerId ? '（你）' : ''}${stat ? streak(stat) : ''}</strong><small class="player-progress">${status}${stat ? ` · ${stat.points} 分` : ''}</small></button>${page}${kick}</div>`; }).join('')}</div>${roleToggle}${roomSettings}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? `<button class="primary wide" id="start-room" ${room.restartPending ? 'disabled' : ''}>開始這局</button>` : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>` : ''}${replay}${blocked}${leaderboard}${exportMap}<button class="copy-button" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
 }
 function renderChatPanel() {
   return `<aside class="chat-panel"><div><p class="eyebrow">ROOM CHAT</p><h2>房間聊天</h2></div><div class="chat-log" id="chat-log"></div><form class="chat-form" id="chat-form"><textarea id="chat-input" rows="1" maxlength="200" placeholder="跟大家說點什麼…"></textarea><button class="primary" type="submit">送出</button></form><small class="chat-notice" id="chat-notice"></small></aside>`;
@@ -936,9 +950,26 @@ function showAchievementToast(list) {
   window.playSfx?.('meow');
 }
 
-async function showProfile() {
+// #/u/<帳號> is the shareable address of a page, and the hash is the only
+// renderer so the browser's back button walks between pages by itself.
+const PROFILE_ROUTE = /^#\/u\/([A-Za-z0-9_-]{1,32})$/;
+const profileRoute = () => PROFILE_ROUTE.exec(location.hash)?.[1] || null;
+function openProfile(username = null) {
+  const hash = username ? `#/u/${username}` : '';
+  if ((location.hash || '') === hash) return showProfile(username);
+  location.hash = hash;
+}
+window.addEventListener('hashchange', () => {
+  const username = profileRoute();
+  if (username) showProfile(username);
+  else if (state.mode === 'profile') home();
+});
+
+async function showProfile(username = null) {
+  const own = !username || username === state.user?.username;
   state.mode = 'profile'; state.room = null; state.practice = null;
   const back = '<button class="back-button" id="back">← 首頁</button>';
+  if (!own) return showPublicProfile(username, back);
   if (!state.user) {
     view.innerHTML = `<div class="page"><section class="page-heading">${back}<p class="eyebrow">PROFILE</p><h1>個人主頁</h1></section><div class="page-body"><section class="panel profile-guest"><h2>登入才能保存</h2><p>你目前是訪客。訪客的進度與對戰紀錄在關閉網頁後不會保留，成就、頭像與相框也需要帳號才能解鎖。登入或註冊後，這次的進度會自動併入帳號。</p><button class="primary" id="profile-login">登入 / 註冊</button></section></div></div>`;
     document.querySelector('#back').onclick = home;
@@ -980,6 +1011,40 @@ async function showProfile() {
   document.querySelectorAll('[data-frame]').forEach(button => button.onclick = () => save({ frame: button.dataset.frame }));
 }
 
+// Someone else's page: the same panels without the editing controls, and with
+// the match rows the server hands out publicly (no boards to upsolve from).
+async function showPublicProfile(username, back) {
+  let profile, levels;
+  try { [profile, levels] = await Promise.all([api(`/api/profile/${encodeURIComponent(username)}`), api('/api/levels')]); }
+  catch (error) {
+    view.innerHTML = `<div class="page"><section class="page-heading">${back}<p class="eyebrow">PROFILE</p><h1>看不到這位貓奴</h1><p>${escapeHtml(error.message)}</p></section></div>`;
+    document.querySelector('#back').onclick = home;
+    return;
+  }
+  const cleared = new Set(profile.cleared);
+  const progressRow = (name, done, total) => `<li class="${total && done === total ? 'done' : ''}"><strong>${escapeHtml(name)}</strong><span class="bar"><i style="width:${total ? Math.round(done / total * 100) : 0}%"></i></span><b>${done} / ${total}</b></li>`;
+  const chapterRows = profile.chapters.filter(chapter => chapter.levelIds.length).map(chapter => progressRow(chapter.name, chapter.levelIds.filter(id => cleared.has(id)).length, chapter.total));
+  const frameById = new Map(profile.frames.map(frame => [frame.id, frame]));
+  const unlocked = profile.achievements.filter(a => a.unlockedAt);
+  const history = profile.history || [];
+  view.innerHTML = `<div class="page"><section class="page-heading">${back}<p class="eyebrow">PROFILE</p><h1>${escapeHtml(profile.user.displayName)} 的主頁</h1><p>這是公開頁面，只看得到進度、成就與對戰紀錄。</p></section><div class="page-body">
+    <section class="profile-grid">
+      <article class="panel profile-card"><div class="profile-identity">${avatarHtml(profile.user.avatar, profile.user.frame, 'large')}<div><strong>${escapeHtml(profile.user.displayName)}</strong><small>@${escapeHtml(profile.user.username)}</small></div></div>
+        <p class="big-number"><b>${unlocked.length}</b> / ${profile.achievements.length} 成就</p>
+        <button class="quiet-button" type="button" id="copy-profile-link">複製這頁面連結</button>
+        <small class="profile-message" id="profile-message"></small></article>
+      <article class="panel"><p class="eyebrow">SINGLE PLAYER</p><h2>單人進度</h2><p class="big-number"><b>${levels.filter(level => cleared.has(level.id)).length}</b> / ${levels.length} 關</p><ol class="chapter-list">${chapterRows.join('') || '<li><span class="empty">難度階梯正在產生。</span></li>'}</ol></article>
+      <article class="panel"><p class="eyebrow">ACHIEVEMENTS</p><h2>成就 <small>${unlocked.length} / ${profile.achievements.length}</small></h2><ul class="achievement-list">${profile.achievements.map(a => `<li class="${a.unlockedAt ? 'unlocked' : 'locked'}"><span class="badge">${a.unlockedAt ? '🏅' : '🔒'}</span><div><strong>${escapeHtml(a.name)}</strong><small>${escapeHtml(a.description)}${a.frame ? ` · 獨得相框「${escapeHtml(frameById.get(a.frame)?.name || a.frame)}」` : ''}</small>${a.unlockedAt ? `<small class="when">${escapeHtml(matchDate(a.unlockedAt))} 解鎖</small>` : ''}</div></li>`).join('')}</ul></article>
+      <article class="panel profile-history"><p class="eyebrow">MATCH HISTORY</p><h2>歷史比賽 <small>${profile.stats.matches} 場 · ${profile.stats.wins} 次第一</small></h2>${history.length ? `<table class="history-table"><thead><tr><th>日期</th><th>房名</th><th>尺寸</th><th>結果</th></tr></thead><tbody>${history.map(record => `<tr><td>${escapeHtml(matchDate(record.finishedAt))}</td><td>${escapeHtml(record.roomName)}</td><td>${record.size} × ${record.size}</td><td class="${escapeHtml(record.outcome?.status || '')}">${record.outcome ? escapeHtml(outcomeLabel(record.outcome)) : '未完成'}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">還沒有對戰紀錄。</p>'}</article>
+    </section></div></div>`;
+  document.querySelector('#back').onclick = home;
+  document.querySelector('#copy-profile-link').onclick = async () => {
+    const link = `${location.origin}${location.pathname}#/u/${profile.user.username}`;
+    try { await navigator.clipboard.writeText(link); document.querySelector('#profile-message').textContent = '已複製連結'; }
+    catch { document.querySelector('#profile-message').textContent = link; }
+  };
+}
+
 function showFinishNotice(results) {
   document.querySelector('#finish-notice')?.remove();
   const notice = document.createElement('section');
@@ -991,4 +1056,7 @@ function showFinishNotice(results) {
   notice.querySelector('button').addEventListener('click', () => notice.remove());
   document.body.append(notice);
 }
-loadIdentity().then(() => socket.connect(), () => socket.connect()).finally(home);
+loadIdentity().then(() => socket.connect(), () => socket.connect()).finally(() => {
+  const username = profileRoute();
+  if (username) showProfile(username); else home();
+});

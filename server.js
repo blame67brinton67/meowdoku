@@ -235,7 +235,7 @@ function hintPuzzle(identity, { levelId, matchId }) {
 // survives the browser, so listing them would rank a throwaway identity.
 function scoreRows() {
   return auth.userLeaderboard()
-    .map(row => ({ key: `u:${row.id}`, name: row.name, cleared: row.cleared, avatar: row.avatar || DEFAULT_AVATAR, frame: row.frame || DEFAULT_FRAME }))
+    .map(row => ({ key: `u:${row.id}`, name: row.name, username: row.username, cleared: row.cleared, avatar: row.avatar || DEFAULT_AVATAR, frame: row.frame || DEFAULT_FRAME }))
     .sort((a, b) => b.cleared - a.cleared || a.name.localeCompare(b.name, 'zh-Hant'));
 }
 // Competition ranking: equal scores share a rank and the next rank skips.
@@ -244,7 +244,7 @@ function leaderboardFor(identity) {
   const rows = scoreRows();
   const rankOf = cleared => rows.filter(row => row.cleared > cleared).length + 1;
   const myKey = identity?.kind === 'user' ? `u:${identity.id}` : null;
-  const top = rows.slice(0, LEADERBOARD_TOP).map(row => ({ rank: rankOf(row.cleared), name: row.name, cleared: row.cleared, avatar: row.avatar, frame: row.frame, me: row.key === myKey }));
+  const top = rows.slice(0, LEADERBOARD_TOP).map(row => ({ rank: rankOf(row.cleared), name: row.name, username: row.username, cleared: row.cleared, avatar: row.avatar, frame: row.frame, me: row.key === myKey }));
   let me = null;
   if (myKey) {
     const mine = rows.find(row => row.key === myKey);
@@ -327,6 +327,22 @@ app.get('/api/profile/me', requireUser, (req, res) => {
   res.json({
     ...publicIdentity(req.identity), avatars: AVATARS, chapters: ladderChapters(ladder), cleared: auth.clearedLevels(req.identity.id),
     ...achievements.listFor(req.identity.id), stats: achievements.matchStats(req.identity.id)
+  });
+});
+// Anyone may read anyone's page, so it carries only what a room already shows
+// plus their public record: no settings, no admin flag, and match rows without
+// the board itself, which is upsolve material for the players who were there.
+const PUBLIC_HISTORY = 20;
+app.get('/api/profile/:username', (req, res) => {
+  const user = auth.userByUsername(String(req.params.username || ''));
+  if (!user) return res.status(404).json({ error: '找不到這位貓奴' });
+  const { achievements: unlocked, frames } = achievements.listFor(user.id);
+  res.json({
+    user: { id: user.id, username: user.username, displayName: user.displayName, avatar: user.avatar || DEFAULT_AVATAR, frame: user.frame || DEFAULT_FRAME },
+    chapters: ladderChapters(ladder), cleared: auth.clearedLevels(user.id),
+    achievements: unlocked, frames,
+    stats: achievements.matchStats(user.id),
+    history: auth.matchHistory(user.id, PUBLIC_HISTORY).map(record => ({ finishedAt: record.finishedAt, roomName: record.roomName, size: record.size, outcome: record.outcome }))
   });
 });
 // Raw input is bounded before sanitizing so a 1 MB name is refused, not scanned.
@@ -523,7 +539,7 @@ function compactRoom(room) {
     countdownEnds: room.countdownEnds, deadline: room.deadline, sprintMode: room.sprintMode, sprintSeconds: room.sprintSeconds, sprintFactor: room.sprintFactor,
     leaderboard: leaderboardRows(room), stats: statsRows(room), kicked: [...room.kicked.values()],
     players: [...room.players.values()].map(player => ({
-      id: player.id, name: player.name, avatar: player.avatar, frame: player.frame, host: player.id === room.hostId, spectator: player.spectator, idle: player.idle, alive: player.alive,
+      id: player.id, name: player.name, username: player.username, avatar: player.avatar, frame: player.frame, host: player.id === room.hostId, spectator: player.spectator, idle: player.idle, alive: player.alive,
       found: player.found.size, completedAt: player.completedAt,
       cats: [...player.found], marks: [...player.marks], wrong: [...player.wrong]
     }))
@@ -917,7 +933,7 @@ function joinRoom(socket, room, { playerId, kind, spectator }) {
   // Looked up fresh rather than from the handshake identity, so a frame picked
   // on the profile page shows up in the next room without reconnecting.
   const user = kind === 'user' ? auth.userById(playerId) : null;
-  const player = { id: playerId, kind, name: kind === 'user' ? String(user?.displayName || user?.username || '貓奴').slice(0, 20) : guestName(room, playerId), avatar: user?.avatar || DEFAULT_AVATAR, frame: user?.frame || DEFAULT_FRAME, spectator, socketId: socket.id, idle: false, disconnectedAt: null, idleTimer: null, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
+  const player = { id: playerId, kind, name: kind === 'user' ? String(user?.displayName || user?.username || '貓奴').slice(0, 20) : guestName(room, playerId), username: user?.username || null, avatar: user?.avatar || DEFAULT_AVATAR, frame: user?.frame || DEFAULT_FRAME, spectator, socketId: socket.id, idle: false, disconnectedAt: null, idleTimer: null, alive: true, found: new Set(), marks: new Set(), wrong: new Set(), completedAt: null };
   room.players.set(playerId, player); socket.join(room.code); socket.emit('chat-backlog', room.chat); emitRoom(room); checkAllSpectator(room);
   if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
 }
