@@ -9,7 +9,7 @@ const state = {
   name: localStorage.meowdokuName || '',
   mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false,
   singleStartedAt: 0, singleMistakes: 0, singleAttemptId: null,
-  touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: '',
+  touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: '', pane: 'board',
   hintQuota: null, hint: null, hintLevel: 0, hintBusy: false, hintMessage: '', boardView: 'fastest'
 };
 const anonymousTag = localStorage.meowdokuAnonTag || String(Math.floor(Math.random() * 9000) + 1000);
@@ -21,6 +21,8 @@ nameInput.addEventListener('input', () => { state.name = nameInput.value.trim();
 const DEFAULT_PALETTE = ['#c4423d', '#2b6cb0', '#c07c12', '#2c7a4b', '#6b4b9e', '#8aa625', '#b83f7d',
                          '#159490', '#8a4a1f', '#4b5768', '#7a2f4e', '#1f6f8b'];
 const DEFAULT_THEME = { palette: DEFAULT_PALETTE, boardLine: '#c7cad1', paper: '#fffaf1' };
+// Keep in sync with the [data-theme="dark"] --paper / --board-line tokens.
+const DARK_THEME = { boardLine: '#3d404b', paper: '#1b1c23' };
 const VALID_COLOR = /^#[0-9a-f]{6}$/i;
 const validColor = value => typeof value === 'string' && VALID_COLOR.test(value) ? value : null;
 function readTheme() {
@@ -35,10 +37,22 @@ function readTheme() {
 const theme = readTheme();
 let palette = theme.palette.slice();
 function saveTheme() { localStorage.meowdokuTheme = JSON.stringify(theme); }
+const darkQuery = matchMedia('(prefers-color-scheme: dark)');
+const readColorScheme = () => { const scheme = localStorage.meowdokuColorScheme; return scheme === 'dark' || scheme === 'light' ? scheme : 'system'; };
+const isDark = () => document.documentElement.dataset.theme === 'dark';
+function applyColorScheme() {
+  const scheme = readColorScheme();
+  document.documentElement.dataset.theme = scheme === 'system' ? (darkQuery.matches ? 'dark' : 'light') : scheme;
+  applyTheme();
+}
+// A paper / grid colour still equal to either scheme's default is treated as
+// "not customised" and follows the scheme; anything else is the player's.
+const isDefaultColor = (key, value) => value === DEFAULT_THEME[key] || value === DARK_THEME[key];
+const effectiveColor = key => isDefaultColor(key, theme[key]) ? (isDark() ? DARK_THEME : DEFAULT_THEME)[key] : theme[key];
 function applyTheme() {
   const root = document.documentElement;
-  root.style.setProperty('--board-line', theme.boardLine);
-  root.style.setProperty('--paper', theme.paper);
+  root.style.setProperty('--board-line', effectiveColor('boardLine'));
+  root.style.setProperty('--paper', effectiveColor('paper'));
   palette = theme.palette.slice();
   document.querySelectorAll('.cell').forEach(cell => cell.style.setProperty('--region', palette[Number(cell.dataset.region) % palette.length]));
 }
@@ -49,11 +63,31 @@ const currentPreset = () => BOARD_THEMES.find(preset => sameColor(preset.boardLi
 function applyPreset(preset) { theme.palette = preset.palette.slice(); theme.boardLine = preset.boardLine; theme.paper = preset.paper; saveTheme(); syncThemeInputs(); applyTheme(); }
 function syncThemeInputs() {
   document.querySelectorAll('[data-theme-palette]').forEach(input => { input.value = theme.palette[Number(input.dataset.themePalette)]; });
-  document.querySelector('[data-theme-key="boardLine"]').value = theme.boardLine;
-  document.querySelector('[data-theme-key="paper"]').value = theme.paper;
+  document.querySelector('[data-theme-key="boardLine"]').value = effectiveColor('boardLine');
+  document.querySelector('[data-theme-key="paper"]').value = effectiveColor('paper');
+  document.querySelector('#color-scheme').value = readColorScheme();
+  syncVibrateToggle();
   const active = currentPreset();
   document.querySelectorAll('[data-theme-preset]').forEach(button => button.setAttribute('aria-checked', String(button.dataset.themePreset === active?.id)));
   document.querySelector('#theme-preset-hint').textContent = active ? `目前：${active.name}。點選後仍可在下方微調單一顏色。` : '目前：自訂。點選主題會覆蓋下方的顏色。';
+}
+// Haptics: touch only, 15ms for a cat and 8ms for a cross. A drag buzzes at
+// most once per cell and never twice within 60ms.
+const VIBRATE_MS = { cat: 15, mark: 8 };
+const canVibrate = typeof navigator.vibrate === 'function';
+const vibrateEnabled = () => canVibrate && localStorage.meowdokuVibrate !== '0';
+const haptics = { keys: new Set(), pendingTouch: new Set(), lastAt: 0 };
+function vibrate(kind, key) {
+  if (!vibrateEnabled()) return;
+  const now = Date.now();
+  if (key) { if (haptics.keys.has(key) || now - haptics.lastAt < 60) return; haptics.keys.add(key); }
+  haptics.lastAt = now;
+  try { navigator.vibrate(VIBRATE_MS[kind]); } catch {}
+}
+function syncVibrateToggle() {
+  const toggle = document.querySelector('#vibrate-toggle'), note = document.querySelector('#vibrate-unsupported');
+  toggle.hidden = !canVibrate; note.hidden = canVibrate;
+  toggle.setAttribute('aria-checked', String(vibrateEnabled()));
 }
 const api = async (url, options) => {
   const response = await fetch(url, options); const data = await response.json();
@@ -80,7 +114,7 @@ const FRAME_ID = /^[a-z]+$/;
 const avatarHtml = (avatar, frame, extra = '') => `<span class="avatar frame-${FRAME_ID.test(frame || '') ? frame : 'plain'} ${extra}" aria-hidden="true">${escapeHtml(avatar || DEFAULT_AVATAR)}</span>`;
 
 document.querySelector('#home-button').addEventListener('click', home);
-document.querySelector('#admin-button').addEventListener('click', () => { adminFeedback(); document.querySelector('#admin-dialog').showModal(); if (document.querySelector('#admin-form').dataset.tab === 'order') loadLevelOrder(); });
+document.querySelector('#admin-button').addEventListener('click', event => { adminFeedback(); openDialog(document.querySelector('#admin-dialog'), event.currentTarget); if (document.querySelector('#admin-form').dataset.tab === 'order') loadLevelOrder(); });
 document.querySelectorAll('[data-admin-tab]').forEach(button => button.addEventListener('click', () => setAdminTab(button.dataset.adminTab)));
 function setAdminTab(tab) {
   document.querySelectorAll('[data-admin-tab]').forEach(button => button.classList.toggle('active', button.dataset.adminTab === tab));
@@ -89,9 +123,7 @@ function setAdminTab(tab) {
   adminFeedback();
   if (tab === 'order') loadLevelOrder();
 }
-document.querySelector('#admin-dialog .close').addEventListener('click', () => document.querySelector('#admin-dialog').close());
-document.querySelector('#auth-button').addEventListener('click', () => { setAuthTab('login'); document.querySelector('#auth-message').textContent = ''; document.querySelector('#auth-dialog').showModal(); });
-document.querySelector('#auth-dialog .close').addEventListener('click', () => document.querySelector('#auth-dialog').close());
+document.querySelector('#auth-button').addEventListener('click', event => { document.querySelector('#auth-message').textContent = ''; openDialog(document.querySelector('#auth-dialog'), event.currentTarget); setAuthTab('login'); });
 document.querySelectorAll('[data-auth-tab]').forEach(button => button.addEventListener('click', () => setAuthTab(button.dataset.authTab)));
 function setAuthTab(tab) {
   document.querySelectorAll('[data-auth-tab]').forEach(button => button.classList.toggle('active', button.dataset.authTab === tab));
@@ -131,14 +163,18 @@ document.querySelector('#logout-button').addEventListener('click', async () => {
   try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
   window.location.reload();
 });
-document.querySelector('#theme-button').addEventListener('click', () => { syncThemeInputs(); document.querySelector('#theme-dialog').showModal(); });
-document.querySelector('#theme-dialog .close').addEventListener('click', () => document.querySelector('#theme-dialog').close());
+document.querySelector('#theme-button').addEventListener('click', event => { syncThemeInputs(); openDialog(document.querySelector('#theme-dialog'), event.currentTarget); });
+document.querySelectorAll('dialog .close').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
+bindTooltips(); bindSprintDialog();
 document.querySelector('#theme-preset-list').innerHTML = BOARD_THEMES.map(preset => `<button type="button" role="radio" aria-checked="false" data-theme-preset="${preset.id}" style="--paper-swatch:${preset.paper}"><span class="preset-swatches">${preset.palette.slice(0, 6).map(color => `<i style="background:${color}"></i>`).join('')}</span>${escapeHtml(preset.name)}</button>`).join('');
 document.querySelectorAll('[data-theme-preset]').forEach(button => button.addEventListener('click', () => applyPreset(BOARD_THEMES.find(preset => preset.id === button.dataset.themePreset))));
 document.querySelectorAll('[data-theme-palette]').forEach(input => input.addEventListener('input', () => { theme.palette[Number(input.dataset.themePalette)] = input.value; saveTheme(); syncThemeInputs(); applyTheme(); }));
 document.querySelectorAll('[data-theme-key]').forEach(input => input.addEventListener('input', () => { theme[input.dataset.themeKey] = input.value; saveTheme(); syncThemeInputs(); applyTheme(); }));
 document.querySelector('#reset-theme').addEventListener('click', () => applyPreset(DEFAULT_THEME));
-applyTheme();
+document.querySelector('#color-scheme').addEventListener('change', event => { localStorage.meowdokuColorScheme = event.target.value; applyColorScheme(); syncThemeInputs(); });
+darkQuery.addEventListener('change', () => { if (readColorScheme() === 'system') { applyColorScheme(); syncThemeInputs(); } });
+document.querySelector('#vibrate-toggle').addEventListener('click', () => { localStorage.meowdokuVibrate = vibrateEnabled() ? '0' : '1'; syncVibrateToggle(); if (vibrateEnabled()) vibrate('cat'); });
+applyColorScheme();
 // Right-click is reserved for puzzle annotation, not the browser context menu.
 document.addEventListener('contextmenu', event => event.preventDefault());
 // Errors from the admin API carry the full list of problems, not just the
@@ -250,12 +286,12 @@ async function home() {
   const nextIndex = levels.findIndex(level => !state.cleared.has(level.id));
   const nextLevel = levels[nextIndex === -1 ? levels.length - 1 : nextIndex] || null;
   const continueLabel = !nextLevel ? '關卡正在準備' : nextIndex === -1 ? '全部通關！再玩一次' : stageLabel(nextLevel, nextIndex);
-  view.innerHTML = `
+  view.innerHTML = `<div class="home">
     <section class="hero"><div><p class="eyebrow">A LITTLE LOGIC GAME</p><h1>幫每隻貓咪<br><em>找到牠的地盤</em></h1><p>每行、每列與每個色塊都只能住一隻貓。不要點錯，貓咪的尊嚴很脆弱。</p></div><div class="hero-cat" aria-hidden="true">=^･ω･^=</div></section>
     <section class="mode-grid"><article class="mode-card solo"><span class="mode-icon">⌁</span><p class="eyebrow">SOLO MODE</p><h2>獨自推理</h2><p>挑一個關卡，慢慢找到唯一的答案。</p><button class="primary" id="open-solo">選擇關卡</button></article>
     <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><button class="dark-button" id="open-multi">進入多人遊戲</button><button class="link-button" id="open-history">對戰紀錄（重新解題）</button></article></section>
     <section class="lower-grid"><article class="panel continue-panel"><div><p class="eyebrow">SINGLE PLAYER</p><h2>接著挑戰</h2><p>${!nextLevel ? '難度階梯正在產生，稍等幾秒再回來。' : nextIndex === -1 ? '所有罐罐都找到了，真是傳奇貓奴。' : '解完前一關，下一盒罐罐正在等你。'}</p></div><div class="continue-level"><span>${continueLabel}</span><strong>${nextLevel ? escapeHtml(nextLevel.name) : '尚未有關卡'}</strong><small>${nextLevel ? `${nextLevel.size} × ${nextLevel.size}` : '貓咪還在畫地圖'}</small>${nextLevel ? ratingLine(nextLevel.rating) : ''}</div><button class="primary" id="continue-solo" ${nextLevel ? '' : 'disabled'}>${nextIndex === -1 ? '再次挑戰 →' : '繼續解題 →'}</button><button class="link-button" id="open-solo-2">查看全部關卡</button></article>
-    <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.top.length ? `<ol>${leaderboard.top.map(entry => `<li class="${entry.me ? 'me' : ''}"><span>${entry.rank}</span>${avatarHtml(entry.avatar, entry.frame, 'small')}<strong>${escapeHtml(entry.name)}${entry.me ? '（你）' : ''}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}${myRankLine(leaderboard)}</article></section>`;
+    <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.top.length ? `<ol>${leaderboard.top.map(entry => `<li class="${entry.me ? 'me' : ''}"><span>${entry.rank}</span>${avatarHtml(entry.avatar, entry.frame, 'small')}<strong>${escapeHtml(entry.name)}${entry.me ? '（你）' : ''}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}${myRankLine(leaderboard)}</article></section></div>`;
   document.querySelector('#open-solo').onclick = showLevels; document.querySelector('#open-solo-2').onclick = showLevels;
   document.querySelector('#open-multi').onclick = showMultiplayer;
   document.querySelector('#open-history').onclick = showHistory;
@@ -272,12 +308,12 @@ async function showLevels() {
   const [levels, progress] = await Promise.all([api('/api/levels'), api('/api/progress/me')]);
   state.levels = levels; state.cleared = new Set(progress.cleared); state.mode = 'levels';
   const clearedCount = levels.filter(level => state.cleared.has(level.id)).length;
-  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">SOLO MODE</p><h1>一步一腳印解鎖</h1><p>已通過 <b>${clearedCount}</b> / ${levels.length} 關。關卡依難度排序，完成前一關才能打開下一盒罐罐。</p></section>${levels.length ? '' : '<section class="panel"><p class="empty">難度階梯正在產生，稍等幾秒再重新整理。</p></section>'}<section class="level-catalog">${levels.map((level, index) => {
+  view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">SOLO MODE</p><h1>一步一腳印解鎖</h1><p>已通過 <b>${clearedCount}</b> / ${levels.length} 關。關卡依難度排序，完成前一關才能打開下一盒罐罐。</p></section><div class="page-body">${levels.length ? '' : '<section class="panel"><p class="empty">難度階梯正在產生，稍等幾秒再重新整理。</p></section>'}<section class="level-catalog">${levels.map((level, index) => {
     // A level already cleared stays replayable even when a newly rated level
     // sorts in front of it and pushes an uncleared board in between.
     const cleared = state.cleared.has(level.id), unlocked = cleared || index === 0 || state.cleared.has(levels[index - 1].id);
     return `<article class="catalog-card ${cleared ? 'cleared' : ''} ${unlocked ? '' : 'locked-level'}"><span>${stageLabel(level, index)}</span><h2>${escapeHtml(level.name)}</h2><p>${level.size} × ${level.size}，${level.size} 隻貓咪</p>${ratingLine(level.rating)}<button class="primary" ${unlocked ? `data-level="${level.id}"` : 'disabled'}>${cleared ? '✓ 已通過，再玩一次' : unlocked ? '開始推理' : '🔒 尚未解鎖'}</button></article>`;
-  }).join('')}</section>`;
+  }).join('')}</section></div></div>`;
   document.querySelector('#back').onclick = home; document.querySelectorAll('[data-level]').forEach(button => button.onclick = () => startSingle(button.dataset.level));
 }
 async function startSingle(id) {
@@ -291,7 +327,7 @@ async function startSingle(id) {
 async function showHistory() {
   const records = await api('/api/history/me');
   state.mode = 'history'; state.room = null; state.practice = null;
-  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MATCH HISTORY</p><h1>對戰紀錄</h1><p>點選任一場對戰，重新打開那張地圖慢慢解。練習不計入單人進度與排行榜。</p></section><section class="level-catalog">${records.length ? records.map(record => `<article class="catalog-card"><span>${escapeHtml(matchDate(record.finishedAt))} · ROOM ${escapeHtml(record.code)}</span><h2>${escapeHtml(record.roomName)}</h2><p>${record.size} × ${record.size}，你：${escapeHtml(outcomeLabel(record.outcome))}；冠軍：${record.results[0] ? `${escapeHtml(record.results[0].name)} ${record.results[0].time}s` : '無人完成'}</p><button class="primary" data-match="${escapeHtml(record.matchId)}">重新解這張圖</button></article>`).join('') : '<p class="empty">還沒有對戰紀錄。去多人房間跑一場，這裡就會留下地圖。</p>'}</section>`;
+  view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MATCH HISTORY</p><h1>對戰紀錄</h1><p>點選任一場對戰，重新打開那張地圖慢慢解。練習不計入單人進度與排行榜。</p></section><div class="page-body"><section class="level-catalog">${records.length ? records.map(record => `<article class="catalog-card"><span>${escapeHtml(matchDate(record.finishedAt))} · ROOM ${escapeHtml(record.code)}</span><h2>${escapeHtml(record.roomName)}</h2><p>${record.size} × ${record.size}，你：${escapeHtml(outcomeLabel(record.outcome))}；冠軍：${record.results[0] ? `${escapeHtml(record.results[0].name)} ${record.results[0].time}s` : '無人完成'}</p><button class="primary" data-match="${escapeHtml(record.matchId)}">重新解這張圖</button></article>`).join('') : '<p class="empty">還沒有對戰紀錄。去多人房間跑一場，這裡就會留下地圖。</p>'}</section></div></div>`;
   document.querySelector('#back').onclick = home;
   document.querySelectorAll('[data-match]').forEach(button => button.onclick = () => startPractice(records.find(record => record.matchId === button.dataset.match)));
 }
@@ -315,9 +351,10 @@ function renderGame(message = '') {
   // they can switch to any remaining player's live board.
   const isViewing = Boolean(isSpectator || me?.alive === false || me?.completedAt);
   const waitingForRoom = state.mode === 'multi' && (room.status === 'lobby' || room.status === 'countdown');
-  const footer = soloMode()
-    ? `<p class="hint">左鍵放置貓咪；右鍵標記叉叉。右鍵拖曳可以快速標記。${state.mode === 'practice' ? '這是練習，點錯不會結束，繼續推理就好。' : ''}</p>`
-    : `<p class="hint">${room.status === 'countdown' ? '準備好了嗎？所有玩家會同時開局。' : waitingForRoom ? '房主按下開始前，地圖會保持保密。' : isViewing ? '點選右側玩家名稱，即可查看他的即時棋盤與標記。' : '左鍵確認貓咪，點錯就淘汰；右鍵僅作個人筆記。'}</p>`;
+  const hintText = soloMode()
+    ? `左鍵放置貓咪；右鍵標記叉叉。右鍵拖曳可以快速標記。${state.mode === 'practice' ? '這是練習，點錯不會結束，繼續推理就好。' : ''}`
+    : room.status === 'countdown' ? '準備好了嗎？所有玩家會同時開局。' : waitingForRoom ? '房主按下開始前，地圖會保持保密。' : isViewing ? '點選玩家列表中的名稱，即可查看他的即時棋盤與標記。' : '左鍵確認貓咪，點錯就淘汰；右鍵僅作個人筆記。';
+  const hint = `<span class="hint-wrap"><button type="button" class="hint-dot" aria-label="操作說明" aria-describedby="tip-game" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-game">${hintText}</span></span>`;
   const boardArea = waitingForRoom
     ? `<div class="hidden-map"><span>${room.status === 'countdown' ? '<b data-countdown="' + room.countdownEnds + '">3</b>' : '♟'}</span><h2>${room.status === 'countdown' ? '即將開始！' : '地圖已封印'}</h2><p>${room.status === 'countdown' ? '倒數結束後，題目會同時揭曉。' : '房主開始遊戲後，所有人會同時看到題目。'}</p></div>`
     : `<div class="board-wrap">${renderBoard(puzzle, Boolean(isViewing || state.connectionLost || (state.mode === 'multi' && room.status !== 'playing')), viewedBoard(me, isViewing))}</div>`;
@@ -327,8 +364,16 @@ function renderGame(message = '') {
     patchGame(puzzle, room, me, isViewing, message);
     return;
   }
+  const multi = state.mode === 'multi';
+  // Portrait tabs: the lobby lives in the players pane, the match on the board.
+  if (multi && room.status !== renderedLayout?.split('|')[4]) state.pane = room.status === 'lobby' ? 'players' : 'board';
   renderedLayout = layout;
-  view.innerHTML = `<section class="game-layout"><div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div>${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : puzzle.ladder ? stageLabel(puzzle) : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>${ratingLine(puzzle.rating)}` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div></div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${footer}${soloMode() ? `<div class="hint-panel" id="hint-panel">${renderHintPanel()}</div>` : ''}${nextAction}</div>${state.mode === 'multi' ? `<div class="side-panels">${renderRoomPanel(room, me)}${renderChatPanel()}</div>` : `<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>${state.mode === 'practice' ? '練習模式：點錯不會結束' : '點錯一格，挑戰失敗'}</li></ul></aside>`}</section>`;
+  const gameMain = `<div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div class="game-title">${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : puzzle.ladder ? stageLabel(puzzle) : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>${ratingLine(puzzle.rating)}` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div>${hint}</div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${soloMode() ? `<div class="hint-panel" id="hint-panel">${renderHintPanel()}</div>` : ''}${nextAction}</div>`;
+  const paneTabs = `<nav class="pane-tabs" aria-label="房間分頁">${[['players', '玩家'], ['board', '棋盤'], ['chat', '聊天']].map(([pane, label]) => `<button type="button" class="pane-tab" data-pane-tab="${pane}" aria-pressed="${state.pane === pane}">${label}</button>`).join('')}</nav>`;
+  view.innerHTML = multi
+    ? `<section class="game-layout multi" data-pane="${state.pane}">${paneTabs}${renderRoomPanel(room, me)}${gameMain}${renderChatPanel()}</section>`
+    : `<section class="game-layout">${gameMain}<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>${state.mode === 'practice' ? '練習模式：點錯不會結束' : '點錯一格，挑戰失敗'}</li></ul></aside></section>`;
+  document.querySelectorAll('[data-pane-tab]').forEach(tab => tab.addEventListener('click', () => { state.pane = tab.dataset.paneTab; document.querySelector('.game-layout').dataset.pane = state.pane; document.querySelectorAll('[data-pane-tab]').forEach(t => t.setAttribute('aria-pressed', t === tab)); }));
   document.querySelector('#quit').onclick = state.mode === 'practice' ? showHistory : state.mode === 'single' ? showLevels : leaveRoom;
   document.querySelector('#next-level')?.addEventListener('click', () => state.nextSingleId ? startSingle(state.nextSingleId) : showLevels());
   bindPracticeButtons(); bindHintPanel();
@@ -461,10 +506,11 @@ function renderRoomPanel(room, me) {
     ? `<button class="role-toggle" id="role-toggle">${me?.spectator ? (room.status === 'finished' ? '下一局加入，成為玩家' : '加入本局，成為玩家') : '改為觀戰者'}</button>` : '';
   const sprintMode = room.sprintMode === 'multiply' ? 'multiply' : 'fixed';
   const sprintValue = sprintMode === 'multiply' ? room.sprintFactor : room.sprintSeconds;
+  // The summary is public to every member, so it must never carry secrets
+  // such as a room password.
+  const sprintSummary = sprintMode === 'multiply' ? `第一名用時 × ${room.sprintFactor}` : `${room.sprintSeconds} 秒`;
   const sprintSetting = room.status === 'lobby'
-    ? isHost
-      ? `<label class="sprint-setting">最後衝刺時間<select id="sprint-mode"><option value="fixed" ${sprintMode === 'fixed' ? 'selected' : ''}>固定秒數</option><option value="multiply" ${sprintMode === 'multiply' ? 'selected' : ''}>第一名用時 ×</option></select><input id="sprint-value" type="text" inputmode="decimal" maxlength="6" value="${sprintValue}" /><small>${sprintMode === 'multiply' ? '倍數 0.1 – 9999' : '1 – 9999 秒'}</small></label>`
-      : `<p class="sprint-setting readonly">最後衝刺：<b>${sprintMode === 'multiply' ? `第一名用時 × ${room.sprintFactor}` : `${room.sprintSeconds} 秒`}</b></p>`
+    ? `<p class="sprint-setting readonly" data-sprint-mode="${sprintMode}" data-sprint-value="${sprintValue}"><span>最後衝刺：<b>${sprintSummary}</b></span>${isHost ? '<button type="button" class="icon-button" id="sprint-settings-button" aria-label="房間設定" aria-haspopup="dialog">⚙</button>' : ''}</p>`
     : '';
   const sizeOptions = [4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => `<option value="${n}" ${n === room.puzzle.size ? 'selected' : ''}>${n} × ${n}</option>`).join('');
   const roomSettings = room.status === 'lobby'
@@ -552,7 +598,7 @@ function bindBoard() {
       event.preventDefault(); clearTimeout(state.touchTimer);
       state.touchPointerId = event.pointerId; state.touchStartedAt = Date.now(); state.suppressClickUntil = Date.now() + 520;
       if (state.lastTouchKey === key && Date.now() - state.lastTouchAt < 360) {
-        state.lastTouchKey = null; applyMark(cell, false); chooseCell(cell); return;
+        state.lastTouchKey = null; applyMark(cell, false); chooseCell(cell, true); return;
       }
       state.lastTouchKey = key; state.lastTouchAt = Date.now();
       beginTouchMark(cell);
@@ -561,7 +607,7 @@ function bindBoard() {
   document.onpointermove = event => {
     if (!state.dragged) return;
     const cell = document.elementFromPoint(event.clientX, event.clientY)?.closest('.cell');
-    if (cell && !cell.closest('.locked')) applyMark(cell, state.dragMarking);
+    if (cell && !cell.closest('.locked')) applyMark(cell, state.dragMarking, event.pointerType === 'touch');
   };
   const endPointer = event => {
     if (event.pointerType === 'touch' && event.pointerId === state.touchPointerId) state.touchPointerId = null;
@@ -574,11 +620,12 @@ function beginTouchMark(cell) {
   if (state.dragged || cell.closest('.locked')) return;
   const key = `${cell.dataset.row}:${cell.dataset.col}`;
   state.dragged = true; state.dragMarking = !state.marks.has(key); state.suppressClickUntil = Date.now() + 700;
-  applyMark(cell, state.dragMarking);
+  haptics.keys.clear(); applyMark(cell, state.dragMarking, true);
 }
-function applyMark(cell, shouldMark) {
+function applyMark(cell, shouldMark, touch = false) {
   if (cell.classList.contains('cat') || cell.classList.contains('wrong')) return;
   const key = `${cell.dataset.row}:${cell.dataset.col}`;
+  if (touch && state.marks.has(key) !== shouldMark) vibrate('mark', key);
   if (shouldMark) state.marks.add(key); else state.marks.delete(key);
   clearHint();
   cell.classList.toggle('mark', shouldMark); cell.textContent = shouldMark ? '×' : '';
@@ -595,7 +642,7 @@ function queueMarksSync() {
     if (state.mode === 'multi' && state.room) socket.emit('marks-update', { code: state.room.code, marks: [...state.marks] });
   }, 150);
 }
-async function chooseCell(cell) {
+async function chooseCell(cell, touch = false) {
   if (cell.closest('.locked')) return;
   const row = Number(cell.dataset.row), col = Number(cell.dataset.col), key = `${row}:${col}`;
   if (state.cats.has(key)) return;
@@ -603,6 +650,7 @@ async function chooseCell(cell) {
     if (state.pending.has(key)) return;
     // The verdict belongs to the server, but the tap has to look answered now.
     state.pending.add(key); cell.classList.add('pending');
+    if (touch) haptics.pendingTouch.add(key);
     socket.emit('guess', { code: state.room.code, row, col });
     return;
   }
@@ -611,7 +659,7 @@ async function chooseCell(cell) {
   // Practice exists to work the puzzle out, so a wrong cell is only marked.
   if (!correct && state.mode === 'practice') { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，再想想。'); const board = document.querySelector('.board'); board.classList.add('shake'); setTimeout(() => board.classList.remove('shake'), 500); return; }
   if (!correct) { state.singleMistakes++; window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，挑戰失敗！'); document.querySelector('.board').classList.add('shake', 'locked'); return; }
-  state.cats.add(key); state.marks.delete(key);
+  state.cats.add(key); state.marks.delete(key); if (touch) vibrate('cat');
   if (state.mode === 'practice') {
     if (state.cats.size === state.single.size) {
       state.practiceMs = Date.now() - state.practiceStartedAt; state.singleCompleted = true;
@@ -638,7 +686,7 @@ async function showMultiplayer() {
   const roomList = publicRooms.length
     ? publicRooms.map(room => `<button class="public-room" data-public-room="${room.code}"><span class="public-room-icon">${room.status === 'lobby' ? '♟' : '◉'}</span><span><strong>${escapeHtml(room.name)}${room.hasPassword ? ' 🔒' : ''}</strong><small>${room.size} × ${room.size} · ${room.players} 位玩家${room.spectators ? ` · ${room.spectators} 位觀戰` : ''}</small></span><b>${room.status === 'lobby' ? '快速加入 →' : '觀戰 →'}</b></button>`).join('')
     : '<p class="empty public-empty">目前沒有公開房間。開一間讓大家加入吧！</p>';
-  view.innerHTML = `<section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label><label>最後衝刺秒數<input name="sprintSeconds" type="text" inputmode="numeric" maxlength="4" value="60" /></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section>`;
+  view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><div class="page-body"><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label><label>最後衝刺秒數<input name="sprintSeconds" type="text" inputmode="numeric" maxlength="4" value="60" /></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section></div></div>`;
   document.querySelector('#back').onclick = home;
   document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target), button = event.target.querySelector('button[type="submit"], button'), label = button.textContent; button.disabled = true; button.textContent = '建立中…'; socket.emit('create-room', { name: playerName(), roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); };
   document.querySelector('#join-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target); joinRoom({ code: form.get('code'), spectator: form.has('spectator') }); };
@@ -674,7 +722,47 @@ function bindRoomButtons() {
   document.querySelector('#room-password')?.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); document.querySelector('#room-password-save')?.click(); } });
   document.querySelectorAll('[data-board-view]').forEach(button => button.addEventListener('click', () => { state.boardView = button.dataset.boardView; renderGame(); }));
   document.querySelector('#role-toggle')?.addEventListener('click', () => socket.emit('set-lobby-role', { code: state.room.code, spectator: !state.room.players.find(player => player.id === state.playerId)?.spectator }, result => result?.error && alert(result.error)));
-  document.querySelector('#sprint-mode')?.addEventListener('change', event => { const mode = event.target.value; socket.emit('set-sprint-setting', { code: state.room.code, mode, value: mode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds }, result => result?.error && alert(result.error)); });
+  document.querySelector('#sprint-settings-button')?.addEventListener('click', event => openDialog(document.querySelector('#sprint-dialog'), event.currentTarget));
+  syncSprintDialog();
+}
+// The sprint controls live in a static dialog; the room panel only carries the
+// current values as data attributes and the dialog mirrors them on every patch.
+function syncSprintDialog() {
+  const summary = document.querySelector('.sprint-setting'), group = document.querySelector('#sprint-group'), mode = document.querySelector('#sprint-mode'), value = document.querySelector('#sprint-value');
+  if (!group || !summary) return;
+  group.dataset.mode = summary.dataset.sprintMode;
+  mode.value = summary.dataset.sprintMode;
+  if (document.activeElement !== value) value.value = summary.dataset.sprintValue;
+}
+function openDialog(dialog, opener) {
+  if (!dialog || dialog.open) return;
+  dialog.showModal();
+  dialog.querySelector('select, input, textarea, button:not(.close)')?.focus();
+  dialog.addEventListener('close', () => opener?.focus(), { once: true });
+}
+function bindTooltips() {
+  const hide = () => document.querySelectorAll('.tooltip.show').forEach(tip => { tip.classList.remove('show'); tip.previousElementSibling?.setAttribute('aria-expanded', 'false'); });
+  const show = dot => {
+    hide();
+    const tip = document.getElementById(dot.getAttribute('aria-describedby')); if (!tip) return;
+    tip.classList.add('show'); dot.setAttribute('aria-expanded', 'true');
+    const rect = dot.getBoundingClientRect(), pad = 12, width = tip.offsetWidth, height = tip.offsetHeight;
+    const left = Math.min(Math.max(pad, rect.left + rect.width / 2 - width / 2), window.innerWidth - width - pad);
+    const below = rect.bottom + 8 + height <= window.innerHeight - pad;
+    tip.style.left = `${left}px`; tip.style.top = `${below ? rect.bottom + 8 : rect.top - height - 8}px`;
+    tip.style.setProperty('--arrow-x', `${rect.left + rect.width / 2 - left - 5}px`); tip.classList.toggle('above', !below);
+  };
+  document.addEventListener('pointerover', event => { const dot = event.target.closest?.('.hint-dot'); if (dot && event.pointerType !== 'touch') show(dot); });
+  document.addEventListener('pointerout', event => { const dot = event.target.closest?.('.hint-dot'); if (dot && event.pointerType !== 'touch' && document.activeElement !== dot) hide(); });
+  document.addEventListener('focusin', event => { const dot = event.target.closest?.('.hint-dot'); if (dot) show(dot); });
+  document.addEventListener('focusout', event => { if (event.target.closest?.('.hint-dot')) hide(); });
+  // Touch has no hover, so a tap toggles and tapping elsewhere dismisses.
+  document.addEventListener('click', event => { const dot = event.target.closest?.('.hint-dot'); if (!dot) return hide(); dot.getAttribute('aria-expanded') === 'true' && event.pointerType !== 'mouse' ? hide() : show(dot); });
+  document.addEventListener('keydown', event => event.key === 'Escape' && hide());
+  window.addEventListener('scroll', hide, true);
+}
+function bindSprintDialog() {
+  document.querySelector('#sprint-mode')?.addEventListener('change', event => { const mode = event.target.value; document.querySelector('#sprint-group').dataset.mode = mode; socket.emit('set-sprint-setting', { code: state.room.code, mode, value: mode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds }, result => result?.error && alert(result.error)); });
   document.querySelector('#sprint-value')?.addEventListener('input', event => { const mode = document.querySelector('#sprint-mode')?.value; event.target.value = mode === 'multiply' ? event.target.value.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1') : event.target.value.replace(/\D/g, ''); });
   document.querySelector('#sprint-value')?.addEventListener('change', event => { const mode = document.querySelector('#sprint-mode')?.value || 'fixed'; socket.emit('set-sprint-setting', { code: state.room.code, mode, value: event.target.value }, result => { result?.error && alert(result.error); const stored = state.room.sprintMode === 'multiply' ? state.room.sprintFactor : state.room.sprintSeconds; event.target.value = stored; }); });
 }
@@ -705,8 +793,8 @@ socket.on('room-state', room => {
   }
   renderGame(); state.deathFlashRendered = true;
 });
-socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); renderGame('答對了！'); window.playSfx?.('meow'); playCatReveal(row, col); } else { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
-socket.on('match-started', () => { window.playSfx?.('go'); state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
+socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); const touch = haptics.pendingTouch.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); if (touch) vibrate('cat'); renderGame('答對了！'); window.playSfx?.('meow'); playCatReveal(row, col); } else { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
+socket.on('match-started', () => { window.playSfx?.('go'); state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); haptics.pendingTouch.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
 socket.on('player-eliminated', ({ playerId }) => { state.deathFlashId = playerId; state.deathFlashRendered = false; });
 socket.on('disconnect', () => {
   if (state.mode !== 'multi' || !state.room) return;
@@ -766,7 +854,7 @@ async function showProfile() {
   state.mode = 'profile'; state.room = null; state.practice = null;
   const back = '<button class="back-button" id="back">← 首頁</button>';
   if (!state.user) {
-    view.innerHTML = `<section class="page-heading">${back}<p class="eyebrow">PROFILE</p><h1>個人主頁</h1></section><section class="panel profile-guest"><h2>登入才能保存</h2><p>你目前是訪客。訪客的進度與對戰紀錄在關閉網頁後不會保留，成就、頭像與相框也需要帳號才能解鎖。登入或註冊後，這次的進度會自動併入帳號。</p><button class="primary" id="profile-login">登入 / 註冊</button></section>`;
+    view.innerHTML = `<div class="page"><section class="page-heading">${back}<p class="eyebrow">PROFILE</p><h1>個人主頁</h1></section><div class="page-body"><section class="panel profile-guest"><h2>登入才能保存</h2><p>你目前是訪客。訪客的進度與對戰紀錄在關閉網頁後不會保留，成就、頭像與相框也需要帳號才能解鎖。登入或註冊後，這次的進度會自動併入帳號。</p><button class="primary" id="profile-login">登入 / 註冊</button></section></div></div>`;
     document.querySelector('#back').onclick = home;
     document.querySelector('#profile-login').onclick = () => document.querySelector('#auth-button').click();
     return;
@@ -784,7 +872,7 @@ async function showProfile() {
   const current = !levels.length ? '關卡正在準備' : !nextLevel ? '全部通關！' : `第 ${String(nextIndex + 1).padStart(3, '0')} 關 · ${escapeHtml(nextLevel.name)}${nextLevel.chapter ? `（${escapeHtml(chapterName.get(nextLevel.chapter) || '')}）` : ''}`;
   const frameById = new Map(profile.frames.map(frame => [frame.id, frame]));
   const unlockedCount = profile.achievements.filter(a => a.unlockedAt).length;
-  view.innerHTML = `<section class="page-heading">${back}<p class="eyebrow">PROFILE</p><h1>個人主頁</h1><p>進度、對戰紀錄與成就都在這裡。相框要靠成就解鎖。</p></section>
+  view.innerHTML = `<div class="page"><section class="page-heading">${back}<p class="eyebrow">PROFILE</p><h1>個人主頁</h1><p>進度、對戰紀錄與成就都在這裡。相框要靠成就解鎖。</p></section><div class="page-body">
     <section class="profile-grid">
       <article class="panel profile-card"><div class="profile-identity">${avatarHtml(profile.user.avatar, profile.user.frame, 'large')}<div><strong>${escapeHtml(profile.user.displayName)}</strong><small>@${escapeHtml(profile.user.username)}</small></div></div>
         <form class="profile-name-form" id="profile-name-form"><label for="display-name">顯示名稱</label><input id="display-name" maxlength="20" value="${escapeHtml(profile.user.displayName)}" /><button class="quiet-button" type="submit">儲存</button></form>
@@ -794,7 +882,7 @@ async function showProfile() {
       <article class="panel"><p class="eyebrow">SINGLE PLAYER</p><h2>單人進度</h2><p class="big-number"><b>${levels.filter(level => cleared.has(level.id)).length}</b> / ${levels.length} 關</p><p>目前進行到：<b>${current}</b></p><ol class="chapter-list">${chapterRows.join('') || '<li><span class="empty">難度階梯正在產生。</span></li>'}</ol></article>
       <article class="panel"><p class="eyebrow">ACHIEVEMENTS</p><h2>成就 <small>${unlockedCount} / ${profile.achievements.length}</small></h2><ul class="achievement-list">${profile.achievements.map(a => `<li class="${a.unlockedAt ? 'unlocked' : 'locked'}"><span class="badge">${a.unlockedAt ? '🏅' : '🔒'}</span><div><strong>${escapeHtml(a.name)}</strong><small>${escapeHtml(a.description)}${a.frame ? ` · 獎勵相框「${escapeHtml(frameById.get(a.frame)?.name || a.frame)}」` : ''}</small>${a.unlockedAt ? `<small class="when">${escapeHtml(matchDate(a.unlockedAt))} 解鎖</small>` : ''}</div></li>`).join('')}</ul></article>
       <article class="panel profile-history"><p class="eyebrow">MATCH HISTORY</p><h2>歷史比賽 <small>${profile.stats.matches} 場 · ${profile.stats.wins} 次第一</small></h2>${history.length ? `<table class="history-table"><thead><tr><th>日期</th><th>房名</th><th>尺寸</th><th>結果</th></tr></thead><tbody>${history.map(record => `<tr><td>${escapeHtml(matchDate(record.finishedAt))}</td><td>${escapeHtml(record.roomName)}</td><td>${record.size} × ${record.size}</td><td class="${escapeHtml(record.outcome?.status || '')}">${record.outcome ? escapeHtml(outcomeLabel(record.outcome)) : '未完成'}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">還沒有對戰紀錄。</p>'}</article>
-    </section>`;
+    </section></div></div>`;
   document.querySelector('#back').onclick = home;
   const message = document.querySelector('#profile-message');
   const save = async body => {
