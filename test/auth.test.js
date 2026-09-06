@@ -31,15 +31,15 @@ test('scrypt hashes verify only with the same password', async () => {
   assert.notDeepEqual(again.salt, salt);
 });
 
-test('registration rules: username shape and weak passwords', () => {
+test('registration rules: username shape, password length only', () => {
   assert.ok(validateUsername('ab'));
   assert.ok(validateUsername('a'.repeat(21)));
   assert.ok(validateUsername('貓咪'));
   assert.ok(validateUsername('has space'));
   assert.equal(validateUsername('Cat_Nap-01'), null);
-  assert.ok(validatePassword('short'));
+  assert.ok(validatePassword(''));
   assert.ok(validatePassword('x'.repeat(73)));
-  for (const weak of ['password', '12345678', 'meowdoku', 'PASSWORD', 'qwertyuiop', 'aaaaaaaa', 'abcdefgh']) assert.ok(validatePassword(weak), weak);
+  for (const easy of ['a', 'short', 'password', '12345678', 'meowdoku', 'aaaaaaaa']) assert.equal(validatePassword(easy), null, easy);
   assert.equal(validatePassword(PASSWORD), null);
 });
 
@@ -187,6 +187,28 @@ test('read-only routes mint no guest without a cookie; signing up absorbs the gu
   assert.deepEqual((await call('GET', '/api/progress/me', { cookie: guest.cookie })).data.cleared, [], 'the absorbed guest cookie is dead');
 });
 
+test('settings are per-account, validated field by field, and closed to guests', async () => {
+  const palette = Array.from({ length: 12 }, (_, index) => `#${String(index + 1).padStart(2, '0')}AABB`);
+  const theme = { palette, boardLine: '#C7CAD1', paper: '#FFFAF1' };
+  const guest = await call('GET', '/api/auth/me');
+  assert.equal((await call('POST', '/api/settings', { body: { theme }, cookie: guest.cookie })).status, 401);
+  const { cookie } = await signUp('settings_user');
+  assert.equal((await call('GET', '/api/auth/me', { cookie })).data.user.settings, null);
+
+  const stored = (await call('POST', '/api/settings', { body: { theme, recentThemes: ['dusk', 'dusk', 'bad id!', 42, 'a'.repeat(40), 'x1', 'x2', 'x3', 'x4', 'x5'], colorScheme: 'dark', vibrate: false, isAdmin: true }, cookie })).data.settings;
+  assert.deepEqual(stored.theme.palette, palette.map(color => color.toLowerCase()));
+  assert.deepEqual(stored.recentThemes, ['dusk', 'x1', 'x2', 'x3', 'x4'], 'deduped, filtered and capped at five');
+  assert.deepEqual({ colorScheme: stored.colorScheme, vibrate: stored.vibrate }, { colorScheme: 'dark', vibrate: false });
+  assert.ok(!('isAdmin' in stored));
+  assert.deepEqual((await call('GET', '/api/auth/me', { cookie })).data.user.settings, stored);
+
+  // A partial palette, a bad colour or an unknown scheme are dropped, not stored.
+  const partial = await call('POST', '/api/settings', { body: { theme: { palette: palette.slice(0, 11), boardLine: '#000000', paper: '#ffffff' }, colorScheme: 'neon' }, cookie });
+  assert.equal(partial.status, 400);
+  assert.equal((await call('POST', '/api/settings', { body: { theme: { ...theme, paper: 'javascript:alert(1)' } }, cookie })).status, 400);
+  assert.deepEqual((await call('GET', '/api/auth/me', { cookie })).data.user.settings, stored, 'the rejected writes changed nothing');
+});
+
 test('single-complete uses the cookie identity, not the body', async () => {
   const levels = (await call('GET', '/api/levels')).data;
   assert.equal(levels[0].id, LEVEL.id);
@@ -237,4 +259,27 @@ test('socket identity comes from the cookie and payload playerId is ignored', as
     const resumed = await emit(guestAgain, 'resume-room', { code, name: 'Guest', playerId: host.user.id });
     assert.deepEqual(resumed, { ok: true, spectator: false, movedToSpectator: false });
   } finally { for (const socket of sockets) socket.disconnect(); }
+});
+
+test('a guest plays multiplayer as 神秘貓奴 and never lands on the leaderboard', async () => {
+  const { cookie, user } = await signUp('mystery_host');
+  const guest = await call('GET', '/api/auth/me');
+  // Clearing a level as a guest still unlocks the next rung, but ranks nobody.
+  await call('POST', '/api/single-complete', { body: { name: '想上榜的訪客', levelId: LEVEL.id }, cookie: guest.cookie });
+  assert.deepEqual((await call('GET', '/api/progress/me', { cookie: guest.cookie })).data.cleared, [LEVEL.id]);
+  const board = (await call('GET', '/api/leaderboard', { cookie: guest.cookie })).data;
+  assert.equal(board.me, null, 'a guest gets no rank of their own');
+  assert.ok(board.top.every(row => row.name !== '想上榜的訪客'), 'and no row either');
+
+  const hostSocket = await connectAs(cookie), guestSocket = await connectAs(guest.cookie);
+  try {
+    const { code } = await emit(hostSocket, 'create-room', { levelId: LEVEL.id, visibility: 'private' });
+    const nextState = new Promise(resolve => hostSocket.once('room-state', resolve));
+    await emit(guestSocket, 'join-room', { code, name: '我自己取的名字' });
+    const room = await nextState;
+    const named = Object.fromEntries(room.players.map(player => [player.id, player.name]));
+    assert.equal(named[user.id], 'mystery_host', 'an account plays under its own display name');
+    assert.match(named[guest.data.guest.id], /^神秘貓奴/);
+    assert.ok(!Object.values(named).includes('我自己取的名字'), 'the payload name is ignored');
+  } finally { hostSocket.disconnect(); guestSocket.disconnect(); }
 });

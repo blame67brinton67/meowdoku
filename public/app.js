@@ -1,21 +1,15 @@
 const view = document.querySelector('#view');
-const nameInput = document.querySelector('#player-name');
 // The socket handshake carries the identity cookie, so it only connects once
 // /api/auth/me has made sure that cookie exists.
 const socket = io({ autoConnect: false });
 const state = {
   // Server-issued identity; the id is what rooms and records are keyed by.
   playerId: null, user: null, guest: null,
-  name: localStorage.meowdokuName || '',
   mode: 'home', single: null, room: null, practice: null, practiceStartedAt: 0, practiceMs: null, marks: new Set(), cats: new Set(), pending: new Set(), chat: [], dragged: false, dragMarking: false,
   singleStartedAt: 0, singleMistakes: 0, singleAttemptId: null,
   touchTimer: null, touchStartedAt: 0, touchPointerId: null, lastTouchKey: null, lastTouchAt: 0, suppressClickUntil: 0, watchingPlayerId: null, cleared: new Set(), levels: [], singleCompleted: false, nextSingleId: null, wrong: new Set(), deathFlashId: null, deathFlashRendered: false, connectionLost: false, resumeCode: null, idleNotice: '', pane: 'board',
   hintQuota: null, hint: null, hintLevel: 0, hintBusy: false, hintMessage: '', boardView: 'fastest'
 };
-const anonymousTag = localStorage.meowdokuAnonTag || String(Math.floor(Math.random() * 9000) + 1000);
-localStorage.meowdokuAnonTag = anonymousTag;
-nameInput.value = state.name;
-nameInput.addEventListener('input', () => { state.name = nameInput.value.trim(); localStorage.meowdokuName = state.name; });
 // Deep, hue *and* lightness varied so neighbouring regions stay apart even at
 // 10 × 10; consecutive entries differ most because region ids grow by BFS.
 const DEFAULT_PALETTE = ['#c4423d', '#2b6cb0', '#c07c12', '#2c7a4b', '#6b4b9e', '#8aa625', '#b83f7d',
@@ -23,6 +17,7 @@ const DEFAULT_PALETTE = ['#c4423d', '#2b6cb0', '#c07c12', '#2c7a4b', '#6b4b9e', 
 const DEFAULT_THEME = { palette: DEFAULT_PALETTE, boardLine: '#c7cad1', paper: '#fffaf1' };
 // Keep in sync with the [data-theme="dark"] --paper / --board-line tokens.
 const DARK_THEME = { boardLine: '#3d404b', paper: '#1b1c23' };
+const ROOM_SIZES = [4, 5, 6, 7, 8, 9, 10, 11, 12];
 const VALID_COLOR = /^#[0-9a-f]{6}$/i;
 const validColor = value => typeof value === 'string' && VALID_COLOR.test(value) ? value : null;
 function readTheme() {
@@ -36,7 +31,46 @@ function readTheme() {
 }
 const theme = readTheme();
 let palette = theme.palette.slice();
-function saveTheme() { localStorage.meowdokuTheme = JSON.stringify(theme); }
+// Themes the player actually used, most recent first, so switching back is one
+// click instead of hunting through the preset grid again.
+const RECENT_THEME_MAX = 5;
+function readRecentThemes() {
+  let stored = [];
+  try { stored = JSON.parse(localStorage.meowdokuRecentThemes) || []; } catch {}
+  return stored.filter(id => BOARD_THEMES.some(preset => preset.id === id)).slice(0, RECENT_THEME_MAX);
+}
+let recentThemes = readRecentThemes();
+function rememberTheme(id) {
+  if (!id) return;
+  recentThemes = [id, ...recentThemes.filter(entry => entry !== id)].slice(0, RECENT_THEME_MAX);
+  localStorage.meowdokuRecentThemes = JSON.stringify(recentThemes);
+}
+function saveTheme() { localStorage.meowdokuTheme = JSON.stringify(theme); queueSettingsSync(); }
+// Colours, recent themes, colour scheme and haptics follow the account once
+// signed in; a guest keeps them in this browser only.
+let settingsSyncTimer = null;
+function queueSettingsSync() {
+  if (!state.user) return;
+  clearTimeout(settingsSyncTimer);
+  settingsSyncTimer = setTimeout(() => {
+    api('/api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme, recentThemes, colorScheme: readColorScheme(), vibrate: localStorage.meowdokuVibrate !== '0' }) }).catch(() => {});
+  }, 500);
+}
+// Account settings win over whatever this browser had, and are mirrored into
+// localStorage so the next load paints the right colours before /me answers.
+function applyAccountSettings(settings) {
+  if (!settings || typeof settings !== 'object') return;
+  if (settings.theme) {
+    theme.palette = DEFAULT_PALETTE.map((color, index) => validColor(settings.theme.palette?.[index]) || color);
+    theme.boardLine = validColor(settings.theme.boardLine) || theme.boardLine;
+    theme.paper = validColor(settings.theme.paper) || theme.paper;
+    localStorage.meowdokuTheme = JSON.stringify(theme);
+  }
+  if (Array.isArray(settings.recentThemes)) { recentThemes = settings.recentThemes.filter(id => BOARD_THEMES.some(preset => preset.id === id)).slice(0, RECENT_THEME_MAX); localStorage.meowdokuRecentThemes = JSON.stringify(recentThemes); }
+  if (settings.colorScheme) localStorage.meowdokuColorScheme = settings.colorScheme;
+  if (typeof settings.vibrate === 'boolean') localStorage.meowdokuVibrate = settings.vibrate ? '1' : '0';
+  applyColorScheme(); syncThemeInputs();
+}
 const darkQuery = matchMedia('(prefers-color-scheme: dark)');
 const readColorScheme = () => { const scheme = localStorage.meowdokuColorScheme; return scheme === 'dark' || scheme === 'light' ? scheme : 'system'; };
 const isDark = () => document.documentElement.dataset.theme === 'dark';
@@ -60,7 +94,15 @@ function applyTheme() {
 // a single tweaked swatch reads as 自訂 without a second piece of stored state.
 const sameColor = (a, b) => a.toLowerCase() === b.toLowerCase();
 const currentPreset = () => BOARD_THEMES.find(preset => sameColor(preset.boardLine, theme.boardLine) && sameColor(preset.paper, theme.paper) && preset.palette.every((color, index) => sameColor(color, theme.palette[index]))) || null;
-function applyPreset(preset) { theme.palette = preset.palette.slice(); theme.boardLine = preset.boardLine; theme.paper = preset.paper; saveTheme(); syncThemeInputs(); applyTheme(); }
+function applyPreset(preset) { theme.palette = preset.palette.slice(); theme.boardLine = preset.boardLine; theme.paper = preset.paper; rememberTheme(preset.id); saveTheme(); syncThemeInputs(); applyTheme(); }
+function renderRecentThemes() {
+  const box = document.querySelector('#recent-themes'), list = document.querySelector('#recent-theme-list');
+  const presets = recentThemes.map(id => BOARD_THEMES.find(preset => preset.id === id)).filter(Boolean);
+  box.hidden = !presets.length;
+  const active = currentPreset();
+  list.innerHTML = presets.map(preset => `<button type="button" class="recent-theme ${preset.id === active?.id ? 'selected' : ''}" data-recent-theme="${preset.id}"><span class="preset-swatches">${preset.palette.slice(0, 4).map(color => `<i style="background:${color}"></i>`).join('')}</span>${escapeHtml(preset.name)}</button>`).join('');
+  list.querySelectorAll('[data-recent-theme]').forEach(button => button.addEventListener('click', () => applyPreset(BOARD_THEMES.find(preset => preset.id === button.dataset.recentTheme))));
+}
 function syncThemeInputs() {
   document.querySelectorAll('[data-theme-palette]').forEach(input => { input.value = theme.palette[Number(input.dataset.themePalette)]; });
   document.querySelector('[data-theme-key="boardLine"]').value = effectiveColor('boardLine');
@@ -69,6 +111,7 @@ function syncThemeInputs() {
   syncVibrateToggle();
   const active = currentPreset();
   document.querySelectorAll('[data-theme-preset]').forEach(button => button.setAttribute('aria-checked', String(button.dataset.themePreset === active?.id)));
+  renderRecentThemes();
   document.querySelector('#theme-preset-hint').textContent = active ? `目前：${active.name}。點選後仍可在下方微調單一顏色。` : '目前：自訂。點選主題會覆蓋下方的顏色。';
 }
 // Haptics: touch only, 15ms for a cat and 8ms for a cross. A drag buzzes at
@@ -101,7 +144,8 @@ const ratingLine = rating => rating ? `<span class="rating"><b>${stars(rating)}<
 // Ladder rungs carry chapter/stage data; admin levels fall back to their place
 // in the sorted catalogue so both kinds read as "which level is this".
 const stageLabel = (level, fallbackIndex) => level.ladder ? `第 ${level.ladder.stage} 關 · ${escapeHtml(level.ladder.chapter)} ${level.ladder.chapterStage}/${level.ladder.chapterLength}` : `LEVEL ${String(fallbackIndex + 1).padStart(3, '0')}`;
-const playerName = () => state.name || state.user?.displayName || `神祕貓奴 #${anonymousTag}`;
+// Names come from the account only; a guest is labelled 神秘貓奴 by the room.
+const playerName = () => state.user?.displayName || '神秘貓奴';
 // Practice (upsolve) borrows the whole single-player board, only the scoring
 // and the wrong-click rule differ.
 const soloMode = () => state.mode === 'single' || state.mode === 'practice';
@@ -137,6 +181,7 @@ function renderAuth() {
   const button = document.querySelector('#auth-button'), account = document.querySelector('#account');
   const isUser = Boolean(state.user);
   button.hidden = isUser; account.hidden = !isUser;
+  document.querySelector('#guest-badge').hidden = isUser;
   if (isUser) { document.querySelector('#account-name').textContent = state.user.displayName; document.querySelector('#account-avatar').innerHTML = avatarHtml(state.user.avatar, state.user.frame, 'small'); }
   document.querySelector('#admin-button').hidden = !state.user?.isAdmin;
   document.querySelector('#guest-notice').textContent = state.guest?.notice || '';
@@ -145,6 +190,7 @@ async function loadIdentity() {
   const me = await api('/api/auth/me');
   state.user = me.user; state.guest = me.guest; state.playerId = me.user?.id || me.guest?.id || null;
   renderAuth();
+  if (state.user?.settings) applyAccountSettings(state.user.settings);
 }
 document.querySelector('#auth-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -165,15 +211,15 @@ document.querySelector('#logout-button').addEventListener('click', async () => {
 });
 document.querySelector('#theme-button').addEventListener('click', event => { syncThemeInputs(); openDialog(document.querySelector('#theme-dialog'), event.currentTarget); });
 document.querySelectorAll('dialog .close').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
-bindTooltips(); bindSprintDialog();
+bindTooltips(); bindSprintDialog(); bindRoomDialog();
 document.querySelector('#theme-preset-list').innerHTML = BOARD_THEMES.map(preset => `<button type="button" role="radio" aria-checked="false" data-theme-preset="${preset.id}" style="--paper-swatch:${preset.paper}"><span class="preset-swatches">${preset.palette.slice(0, 6).map(color => `<i style="background:${color}"></i>`).join('')}</span>${escapeHtml(preset.name)}</button>`).join('');
 document.querySelectorAll('[data-theme-preset]').forEach(button => button.addEventListener('click', () => applyPreset(BOARD_THEMES.find(preset => preset.id === button.dataset.themePreset))));
 document.querySelectorAll('[data-theme-palette]').forEach(input => input.addEventListener('input', () => { theme.palette[Number(input.dataset.themePalette)] = input.value; saveTheme(); syncThemeInputs(); applyTheme(); }));
 document.querySelectorAll('[data-theme-key]').forEach(input => input.addEventListener('input', () => { theme[input.dataset.themeKey] = input.value; saveTheme(); syncThemeInputs(); applyTheme(); }));
 document.querySelector('#reset-theme').addEventListener('click', () => applyPreset(DEFAULT_THEME));
-document.querySelector('#color-scheme').addEventListener('change', event => { localStorage.meowdokuColorScheme = event.target.value; applyColorScheme(); syncThemeInputs(); });
+document.querySelector('#color-scheme').addEventListener('change', event => { localStorage.meowdokuColorScheme = event.target.value; applyColorScheme(); syncThemeInputs(); queueSettingsSync(); });
 darkQuery.addEventListener('change', () => { if (readColorScheme() === 'system') { applyColorScheme(); syncThemeInputs(); } });
-document.querySelector('#vibrate-toggle').addEventListener('click', () => { localStorage.meowdokuVibrate = vibrateEnabled() ? '0' : '1'; syncVibrateToggle(); if (vibrateEnabled()) vibrate('cat'); });
+document.querySelector('#vibrate-toggle').addEventListener('click', () => { localStorage.meowdokuVibrate = vibrateEnabled() ? '0' : '1'; syncVibrateToggle(); queueSettingsSync(); if (vibrateEnabled()) vibrate('cat'); });
 applyColorScheme();
 // Right-click is reserved for puzzle annotation, not the browser context menu.
 document.addEventListener('contextmenu', event => event.preventDefault());
@@ -289,7 +335,7 @@ async function home() {
   view.innerHTML = `<div class="home">
     <section class="hero"><div><p class="eyebrow">A LITTLE LOGIC GAME</p><h1>幫每隻貓咪<br><em>找到牠的地盤</em></h1><p>每行、每列與每個色塊都只能住一隻貓。不要點錯，貓咪的尊嚴很脆弱。</p></div><div class="hero-cat" aria-hidden="true">=^･ω･^=</div></section>
     <section class="mode-grid"><article class="mode-card solo"><span class="mode-icon">⌁</span><p class="eyebrow">SOLO MODE</p><h2>獨自推理</h2><p>挑一個關卡，慢慢找到唯一的答案。</p><button class="primary" id="open-solo">選擇關卡</button></article>
-    <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><button class="dark-button" id="open-multi">進入多人遊戲</button><button class="link-button" id="open-history">對戰紀錄（重新解題）</button></article></section>
+    <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><div class="mode-actions"><button class="dark-button" id="open-multi">進入多人遊戲</button><button class="link-button" id="open-history">對戰紀錄（重新解題）</button></div></article></section>
     <section class="lower-grid"><article class="panel continue-panel"><div><p class="eyebrow">SINGLE PLAYER</p><h2>接著挑戰</h2><p>${!nextLevel ? '難度階梯正在產生，稍等幾秒再回來。' : nextIndex === -1 ? '所有罐罐都找到了，真是傳奇貓奴。' : '解完前一關，下一盒罐罐正在等你。'}</p></div><div class="continue-level"><span>${continueLabel}</span><strong>${nextLevel ? escapeHtml(nextLevel.name) : '尚未有關卡'}</strong><small>${nextLevel ? `${nextLevel.size} × ${nextLevel.size}` : '貓咪還在畫地圖'}</small>${nextLevel ? ratingLine(nextLevel.rating) : ''}</div><button class="primary" id="continue-solo" ${nextLevel ? '' : 'disabled'}>${nextIndex === -1 ? '再次挑戰 →' : '繼續解題 →'}</button><button class="link-button" id="open-solo-2">查看全部關卡</button></article>
     <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.top.length ? `<ol>${leaderboard.top.map(entry => `<li class="${entry.me ? 'me' : ''}"><span>${entry.rank}</span>${avatarHtml(entry.avatar, entry.frame, 'small')}<strong>${escapeHtml(entry.name)}${entry.me ? '（你）' : ''}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}${myRankLine(leaderboard)}</article></section></div>`;
   document.querySelector('#open-solo').onclick = showLevels; document.querySelector('#open-solo-2').onclick = showLevels;
@@ -452,11 +498,11 @@ function patchGame(puzzle, room, me, isViewing, message) {
   if (state.mode !== 'multi') return;
   const panel = document.querySelector('.room-panel'), html = renderRoomPanel(room, me);
   if (panel && panel.outerHTML !== html) {
-    const sprintFocused = document.activeElement?.id === 'sprint-value', passwordFocused = document.activeElement?.id === 'room-password', typedPassword = document.querySelector('#room-password')?.value || '';
+    // The settings controls live in the static dialog, so a panel rerender
+    // cannot disturb what the host is typing there.
+    const sprintFocused = document.activeElement?.id === 'sprint-value';
     panel.outerHTML = html; bindRoomButtons();
     if (sprintFocused) { const input = document.querySelector('#sprint-value'); input?.focus(); input?.setSelectionRange(input.value.length, input.value.length); }
-    const password = document.querySelector('#room-password');
-    if (password && typedPassword) { password.value = typedPassword; if (passwordFocused) { password.focus(); password.setSelectionRange(typedPassword.length, typedPassword.length); } }
   }
 }
 function patchBoard(boardState) {
@@ -512,11 +558,10 @@ function renderRoomPanel(room, me) {
   const sprintSetting = room.status === 'lobby'
     ? `<p class="sprint-setting readonly" data-sprint-mode="${sprintMode}" data-sprint-value="${sprintValue}"><span>最後衝刺：<b>${sprintSummary}</b></span>${isHost ? '<button type="button" class="icon-button" id="sprint-settings-button" aria-label="房間設定" aria-haspopup="dialog">⚙</button>' : ''}</p>`
     : '';
-  const sizeOptions = [4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => `<option value="${n}" ${n === room.puzzle.size ? 'selected' : ''}>${n} × ${n}</option>`).join('');
+  // Board size, visibility and password are edited in #sprint-dialog; the panel
+  // only shows the resulting state and carries it for syncRoomDialog().
   const roomSettings = room.status === 'lobby'
-    ? isHost
-      ? `<div class="room-settings"><label>棋盤大小<select id="room-size" ${room.restartPending ? 'disabled' : ''}>${sizeOptions}</select></label><label>房間類型<select id="room-visibility"><option value="public" ${room.visibility === 'public' ? 'selected' : ''}>公開（顯示於列表）</option><option value="private" ${room.visibility === 'private' ? 'selected' : ''}>私人（僅限房號）</option></select></label><label>房間密碼<span class="password-row"><input id="room-password" type="password" maxlength="32" autocomplete="off" placeholder="${room.hasPassword ? '已設定，輸入以替換' : '未設定'}" /><button class="copy-button" id="room-password-save">設定</button>${room.hasPassword ? '<button class="copy-button" id="room-password-clear">清除密碼</button>' : ''}</span></label><small>改大小會重新產題；密碼最長 32 字，伺服器只保存雜湊。</small></div>`
-      : `<p class="sprint-setting readonly">棋盤 <b>${room.puzzle.size} × ${room.puzzle.size}</b> · ${room.visibility === 'private' ? '私人房' : '公開房'} · ${room.hasPassword ? '🔒 需要密碼' : '無密碼'}</p>`
+    ? `<p class="sprint-setting room-summary readonly" data-room-size="${room.puzzle.size}" data-room-visibility="${room.visibility === 'private' ? 'private' : 'public'}" data-room-password="${room.hasPassword ? '1' : ''}" data-room-locked="${room.restartPending ? '1' : ''}" data-room-host="${isHost ? '1' : ''}"><span>棋盤 <b>${room.puzzle.size} × ${room.puzzle.size}</b> · ${room.visibility === 'private' ? '私人房' : '公開房'} · ${room.hasPassword ? '🔒 需要密碼' : '無密碼'}</span></p>`
     : '';
   const streak = entry => entry.streak >= 2 ? ` <em class="streak">🔥 連霸 ${entry.streak}</em>` : '';
   const boardTabs = `<div class="board-tabs"><button class="link-button ${state.boardView === 'fastest' ? 'active' : ''}" data-board-view="fastest">最快紀錄</button><button class="link-button ${state.boardView === 'points' ? 'active' : ''}" data-board-view="points">積分榜</button></div>`;
@@ -668,7 +713,7 @@ async function chooseCell(cell, touch = false) {
     window.playSfx?.('meow'); playCatReveal(row, col); return;
   }
   if (state.cats.size === state.single.size) {
-    const result = await api('/api/single-complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: playerName(), levelId: state.single.id, ms: Date.now() - state.singleStartedAt, mistakes: state.singleMistakes }) });
+    const result = await api('/api/single-complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ levelId: state.single.id, ms: Date.now() - state.singleStartedAt, mistakes: state.singleMistakes }) });
     state.cleared.add(state.single.id); state.singleAttemptId = null;
     if (result.unlocked?.length) showAchievementToast(result.unlocked);
     const currentIndex = state.levels.findIndex(level => level.id === state.single.id);
@@ -688,14 +733,14 @@ async function showMultiplayer() {
     : '<p class="empty public-empty">目前沒有公開房間。開一間讓大家加入吧！</p>';
   view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MULTIPLAYER</p><h1>揪朋友來解題</h1><p>開一間公開房，或用私密 Key 與朋友相聚。</p></section><div class="page-body"><section class="lobby-grid"><form class="lobby-card" id="create-room"><p class="eyebrow">CREATE ROOM</p><h2>開新房間</h2><label>房間名稱<input name="roomName" maxlength="40" value="${escapeHtml(playerName())} 的貓咪派對" /></label><label>房間類型<select name="visibility"><option value="public" selected>公開房間（顯示於列表）</option><option value="private">私人房間（僅限 Key 加入）</option></select></label><label>地圖尺寸<select name="size"><option value="7" selected>7 × 7</option><option value="8">8 × 8</option><option value="9">9 × 9</option><option value="10">10 × 10</option><option value="11">11 × 11</option><option value="12">12 × 12</option></select></label><label>最後衝刺秒數<input name="sprintSeconds" type="text" inputmode="numeric" maxlength="4" value="60" /></label><button class="primary wide">建立房間</button></form><form class="lobby-card dark" id="join-room"><p class="eyebrow">JOIN BY KEY</p><h2>使用房間 Key</h2><label>房間 Key<input name="code" maxlength="5" placeholder="例如 AB12C" required /></label><label class="check"><input type="checkbox" name="spectator" /> 以觀戰者身分加入</label><button class="light-button wide">使用 Key 加入</button></form></section><section class="public-rooms"><div class="section-title"><div><p class="eyebrow">PUBLIC ROOMS</p><h2>公開房間</h2></div><button class="link-button" id="refresh-rooms">重新整理</button></div><div class="public-room-list">${roomList}</div></section></div></div>`;
   document.querySelector('#back').onclick = home;
-  document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target), button = event.target.querySelector('button[type="submit"], button'), label = button.textContent; button.disabled = true; button.textContent = '建立中…'; socket.emit('create-room', { name: playerName(), roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); };
+  document.querySelector('#create-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target), button = event.target.querySelector('button[type="submit"], button'), label = button.textContent; button.disabled = true; button.textContent = '建立中…'; socket.emit('create-room', { roomName: form.get('roomName'), size: form.get('size'), visibility: form.get('visibility'), sprintSeconds: form.get('sprintSeconds') }, result => { button.disabled = false; button.textContent = label; if (result?.error) alert(result.error); }); };
   document.querySelector('#join-room').onsubmit = event => { event.preventDefault(); const form = new FormData(event.target); joinRoom({ code: form.get('code'), spectator: form.has('spectator') }); };
   document.querySelector('#refresh-rooms').onclick = showMultiplayer;
   document.querySelectorAll('[data-public-room]').forEach(button => button.addEventListener('click', () => joinRoom({ code: button.dataset.publicRoom, spectator: false })));
 }
 // A locked room is only discovered on the first refusal, then asked for once.
 function joinRoom({ code, spectator }, password) {
-  socket.emit('join-room', { code, name: playerName(), spectator, password }, result => {
+  socket.emit('join-room', { code, spectator, password }, result => {
     if (!result.error) return;
     if (result.needsPassword && password === undefined) { const entered = prompt('這間房需要密碼，請輸入：'); if (entered !== null) return joinRoom({ code, spectator }, entered); return; }
     alert(result.error);
@@ -714,25 +759,46 @@ function bindRoomButtons() {
   });
   document.querySelectorAll('[data-kick]').forEach(button => button.addEventListener('click', () => { const target = state.room.players.find(player => player.id === button.dataset.kick); if (!confirm(`要把 ${target?.name || '這位成員'} 移出房間嗎？他將無法再加入，除非你解除封鎖。`)) return; socket.emit('kick-player', { code: state.room.code, targetId: button.dataset.kick }, result => result?.error && alert(result.error)); }));
   document.querySelectorAll('[data-unblock]').forEach(button => button.addEventListener('click', () => socket.emit('unblock-player', { code: state.room.code, targetId: button.dataset.unblock }, result => result?.error && alert(result.error))));
-  const updateSettings = (payload, done) => socket.emit('update-room-settings', { code: state.room.code, ...payload }, result => { if (result?.error) alert(result.error); done?.(result); });
-  document.querySelector('#room-size')?.addEventListener('change', event => { event.target.disabled = true; updateSettings({ size: event.target.value }, () => renderGame()); });
-  document.querySelector('#room-visibility')?.addEventListener('change', event => updateSettings({ visibility: event.target.value }, () => renderGame()));
-  document.querySelector('#room-password-save')?.addEventListener('click', () => { const input = document.querySelector('#room-password'); updateSettings({ password: input.value }, result => { if (result?.ok) input.value = ''; }); });
-  document.querySelector('#room-password-clear')?.addEventListener('click', () => updateSettings({ clearPassword: true }));
-  document.querySelector('#room-password')?.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); document.querySelector('#room-password-save')?.click(); } });
   document.querySelectorAll('[data-board-view]').forEach(button => button.addEventListener('click', () => { state.boardView = button.dataset.boardView; renderGame(); }));
   document.querySelector('#role-toggle')?.addEventListener('click', () => socket.emit('set-lobby-role', { code: state.room.code, spectator: !state.room.players.find(player => player.id === state.playerId)?.spectator }, result => result?.error && alert(result.error)));
   document.querySelector('#sprint-settings-button')?.addEventListener('click', event => openDialog(document.querySelector('#sprint-dialog'), event.currentTarget));
-  syncSprintDialog();
+  syncSprintDialog(); syncRoomDialog();
 }
 // The sprint controls live in a static dialog; the room panel only carries the
 // current values as data attributes and the dialog mirrors them on every patch.
 function syncSprintDialog() {
-  const summary = document.querySelector('.sprint-setting'), group = document.querySelector('#sprint-group'), mode = document.querySelector('#sprint-mode'), value = document.querySelector('#sprint-value');
+  const summary = document.querySelector('[data-sprint-mode]'), group = document.querySelector('#sprint-group'), mode = document.querySelector('#sprint-mode'), value = document.querySelector('#sprint-value');
   if (!group || !summary) return;
   group.dataset.mode = summary.dataset.sprintMode;
   mode.value = summary.dataset.sprintMode;
   if (document.activeElement !== value) value.value = summary.dataset.sprintValue;
+}
+// Same idea for the room's own settings: the host edits them in the dialog and
+// the panel line is the single source of truth the dialog mirrors.
+function syncRoomDialog() {
+  const group = document.querySelector('#room-group'), summary = document.querySelector('[data-room-size]');
+  if (!group) return;
+  group.hidden = !summary || summary.dataset.roomHost !== '1';
+  if (group.hidden) return;
+  const size = document.querySelector('#room-size'), locked = summary.dataset.roomLocked === '1', hasPassword = summary.dataset.roomPassword === '1';
+  const options = ROOM_SIZES.map(n => `<option value="${n}">${n} × ${n}</option>`).join('');
+  if (size.innerHTML !== options) size.innerHTML = options;
+  size.value = summary.dataset.roomSize; size.disabled = locked;
+  document.querySelector('#room-visibility').value = summary.dataset.roomVisibility;
+  const password = document.querySelector('#room-password');
+  password.placeholder = hasPassword ? '已設定，輸入以替換' : '未設定';
+  document.querySelector('#room-password-clear').hidden = !hasPassword;
+  document.querySelector('#room-settings-note').textContent = locked ? '新題目正在產生，稍後才能再改大小。' : '改大小會重新產題；密碼最長 32 字，伺服器只保存雜湊。';
+}
+function bindRoomDialog() {
+  const updateSettings = (payload, done) => socket.emit('update-room-settings', { code: state.room.code, ...payload }, result => { if (result?.error) alert(result.error); done?.(result); });
+  document.querySelector('#room-size').addEventListener('change', event => { event.target.disabled = true; updateSettings({ size: event.target.value }, () => renderGame()); });
+  document.querySelector('#room-visibility').addEventListener('change', event => updateSettings({ visibility: event.target.value }, () => renderGame()));
+  const password = document.querySelector('#room-password');
+  document.querySelector('#room-password-save').addEventListener('click', () => updateSettings({ password: password.value }, result => { if (result?.ok) password.value = ''; }));
+  document.querySelector('#room-password-clear').addEventListener('click', () => { password.value = ''; updateSettings({ clearPassword: true }); });
+  // The board listens on the document and the dialog form would submit on Enter.
+  password.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); document.querySelector('#room-password-save').click(); } });
 }
 function openDialog(dialog, opener) {
   if (!dialog || dialog.open) return;
@@ -802,7 +868,7 @@ socket.on('disconnect', () => {
 });
 socket.on('connect', () => {
   if (!state.resumeCode || state.mode !== 'multi') return;
-  socket.emit('resume-room', { code: state.resumeCode, name: playerName() }, result => {
+  socket.emit('resume-room', { code: state.resumeCode }, result => {
     if (result?.error) return exitRoom(result.error.includes('移出') ? result.error : '房間已關閉，已回到首頁。');
     state.connectionLost = false; state.resumeCode = null;
     if (result.movedToSpectator) state.idleNotice = '你離線太久，已改為觀戰。';
