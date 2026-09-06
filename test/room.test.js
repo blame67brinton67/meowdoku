@@ -329,6 +329,24 @@ test('eliminated player receives the answer in the room payload while others sti
   assert.doesNotMatch(JSON.stringify(compactRoom({ ...room(code), status: 'lobby' })), /solution|regions/);
 });
 
+test('an ordinary guess broadcasts neither the board nor the other players boards', async () => {
+  const { code, sockets: [host, guest], ids: [hostId] } = await makeRoom(['host', 'guest']);
+  await startMatch(code, host, hostId);
+  const state = once(guest, 'room-state');
+  const [cat] = room(code).puzzle.solution;
+  host.emit('guess', { code, row: cat.row, col: cat.col });
+  const payload = await state;
+  assert.equal(payload.status, 'playing');
+  assert.equal(payload.puzzle.regions, undefined);
+  assert.equal(payload.puzzle.solution, undefined);
+  assert.deepEqual(payload.players.map(player => player.cats), [undefined, undefined]);
+  assert.equal(payload.players.find(player => player.id === hostId).found, 1);
+  // Anyone who somehow lacks the board can still ask for the whole thing.
+  const refreshed = once(guest, 'room-state');
+  guest.emit('room-refresh', { code });
+  assert.ok(Array.isArray((await refreshed).puzzle.regions));
+});
+
 test('roles can change once everyone is done, never mid-round, without touching points', async () => {
   const { code, sockets: [host, guest, third], ids: [hostId, guestId, thirdId] } = await makeRoom(['host', 'guest', 'third']);
   await startMatch(code, host, hostId);

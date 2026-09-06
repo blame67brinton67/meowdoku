@@ -434,7 +434,8 @@ function currentPuzzle() { return soloMode() ? state.single : state.room?.puzzle
 // why a click used to feel sticky, so anything that leaves the page structure
 // intact takes the patch path instead.
 let renderedLayout = '';
-function renderGame(message = '') {
+let renderedPanel = '';
+function renderGame(message = '', { board = true } = {}) {
   const puzzle = currentPuzzle(); if (!puzzle) return;
   const room = state.room, me = room?.players.find(p => p.id === state.playerId), isSpectator = me?.spectator;
   // Finished players are spectators too: their own board is frozen, while
@@ -451,17 +452,18 @@ function renderGame(message = '') {
   const nextAction = state.mode === 'practice' ? practiceAction() : state.mode === 'single' && state.singleCompleted ? `<div class="next-action">${state.nextSingleId ? '<button class="primary" id="next-level">前往下一關 →</button>' : '<button class="primary" id="next-level">回到關卡列表</button>'}</div>` : '';
   const layout = [state.mode, room?.code || '', puzzle.id || '', puzzle.size, room?.status || '', waitingForRoom, Boolean(isViewing), state.singleCompleted, state.nextSingleId, state.connectionLost].join('|');
   if (layout === renderedLayout && document.querySelector('.game-layout')) {
-    patchGame(puzzle, room, me, isViewing, message);
+    patchGame(puzzle, room, me, isViewing, message, board);
     return;
   }
   const multi = state.mode === 'multi';
   // Portrait tabs: the lobby lives in the players pane, the match on the board.
   if (multi && room.status !== renderedLayout?.split('|')[4]) state.pane = room.status === 'lobby' ? 'players' : 'board';
   renderedLayout = layout;
+  renderedPanel = multi ? renderRoomPanel(room, me) : '';
   const gameMain = `<div class="game-main"><div class="game-top"><button class="back-button" id="quit">← ${state.mode === 'practice' ? '對戰紀錄' : state.mode === 'single' ? '關卡列表' : '離開房間'}</button><div class="game-title">${soloMode() ? `<p class="eyebrow">${state.mode === 'practice' ? `PRACTICE • ROOM ${escapeHtml(state.practice.code)}` : puzzle.ladder ? stageLabel(puzzle) : 'SOLO'} • ${puzzle.size} × ${puzzle.size}</p><h1>${escapeHtml(puzzle.name)}</h1>${ratingLine(puzzle.rating)}` : `<p class="eyebrow">ROOM ${room.code}</p><h1>${escapeHtml(room.name)}</h1>`}</div>${hint}</div><div class="game-status">${statusBar(puzzle, room, me)}<span id="game-message">${message}</span></div>${boardArea}${soloMode() ? `<div class="hint-panel" id="hint-panel">${renderHintPanel()}</div>` : ''}${nextAction}</div>`;
   const paneTabs = `<nav class="pane-tabs" aria-label="房間分頁">${[['players', '玩家'], ['board', '棋盤'], ['chat', '聊天']].map(([pane, label]) => `<button type="button" class="pane-tab" data-pane-tab="${pane}" aria-pressed="${state.pane === pane}">${label}</button>`).join('')}</nav>`;
   view.innerHTML = multi
-    ? `<section class="game-layout multi" data-pane="${state.pane}">${paneTabs}${renderRoomPanel(room, me)}${gameMain}${renderChatPanel()}</section>`
+    ? `<section class="game-layout multi" data-pane="${state.pane}">${paneTabs}${renderedPanel}${gameMain}${renderChatPanel()}</section>`
     : `<section class="game-layout">${gameMain}<aside class="rule-card"><p class="eyebrow">RULES</p><h2>貓咪守則</h2><ul><li>每種顏色恰有一隻貓</li><li>每行、每列恰有一隻貓</li><li>貓咪之間不能相鄰</li><li>${state.mode === 'practice' ? '練習模式：點錯不會結束' : '點錯一格，挑戰失敗'}</li></ul></aside></section>`;
   document.querySelectorAll('[data-pane-tab]').forEach(tab => tab.addEventListener('click', () => { state.pane = tab.dataset.paneTab; document.querySelector('.game-layout').dataset.pane = state.pane; document.querySelectorAll('[data-pane-tab]').forEach(t => t.setAttribute('aria-pressed', t === tab)); }));
   document.querySelector('#quit').onclick = state.mode === 'practice' ? showHistory : state.mode === 'single' ? showLevels : leaveRoom;
@@ -537,12 +539,15 @@ function bindPracticeButtons() {
   document.querySelector('#practice-back')?.addEventListener('click', showHistory);
 }
 const PANEL_SCROLLERS = ['.people', '.room-leaderboard ol', '.leaderboard ol'];
-function patchGame(puzzle, room, me, isViewing, message) {
+function patchGame(puzzle, room, me, isViewing, message, board = true) {
   document.querySelector('.game-status').innerHTML = `${statusBar(puzzle, room, me)}<span id="game-message">${message}</span>`;
-  patchBoard(viewedBoard(me, isViewing));
+  if (board) patchBoard(viewedBoard(me, isViewing));
   if (state.mode !== 'multi') return;
   const panel = document.querySelector('.room-panel'), html = renderRoomPanel(room, me);
-  if (panel && panel.outerHTML !== html) {
+  // Comparing against the last markup we wrote, rather than reading the live
+  // outerHTML back, keeps a broadcast from serialising the whole panel again.
+  if (panel && renderedPanel !== html) {
+    renderedPanel = html;
     // The settings controls live in the static dialog, so a panel rerender
     // cannot disturb what the host is typing there.
     const sprintFocused = document.activeElement?.id === 'sprint-value';
@@ -986,6 +991,22 @@ function leaveRoom() {
   socket.emit('leave-room', { code: state.room.code }, () => { clearTimeout(fallback); quit(); });
 }
 
+// The frequent states leave out what a guess cannot have changed: the round's
+// regions and the other players' boards. Carry those over from the state we
+// already hold, and ask for a whole one if we somehow never received it.
+function mergeRoom(room) {
+  const playing = room.status === 'playing' || room.status === 'finished';
+  const known = state.room?.code === room.code ? state.room : null;
+  if (!room.puzzle.regions && known?.puzzle?.id === room.puzzle.id) room.puzzle = known.puzzle;
+  else if (!room.puzzle.regions && playing) socket.emit('room-refresh', { code: room.code });
+  if (!known) return;
+  for (const player of room.players) {
+    if (player.cats) continue;
+    const before = known.players.find(other => other.id === player.id);
+    player.cats = before?.cats || []; player.marks = before?.marks || []; player.wrong = before?.wrong || [];
+  }
+}
+
 socket.on('room-state', room => {
   // Reading a profile or a level list is not an invitation to be dragged back
   // into the room, so a broadcast only paints when the room is the open page —
@@ -993,6 +1014,7 @@ socket.on('room-state', room => {
   const invited = state.joining === true || state.joining === room.code;
   if (!invited && state.mode !== 'multi' && currentRoute().name !== 'multi') return;
   state.joining = null;
+  mergeRoom(room);
   state.room = room; state.mode = 'multi';
   navigate(`/multi/${room.code}`, { replace: currentRoute().name === 'multi' });
   const me = room.players.find(player => player.id === state.playerId);
@@ -1004,7 +1026,9 @@ socket.on('room-state', room => {
     state.watchingPlayerId = room.players.find(player => !player.spectator && player.id !== state.playerId)?.id
       || room.players.find(player => !player.spectator)?.id || null;
   }
-  renderGame(); state.deathFlashRendered = true;
+  // While you are racing, your own board only moves through your own clicks,
+  // so a broadcast repaints the roster and leaves the cells alone.
+  renderGame('', { board: Boolean(canWatch) }); state.deathFlashRendered = true;
 });
 socket.on('guess-result', ({ row, col, hit }) => { const key = `${row}:${col}`; state.pending.delete(key); const touch = haptics.pendingTouch.delete(key); if (hit) { state.cats.add(key); state.marks.delete(key); if (touch) vibrate('cat'); renderGame('答對了！'); window.playSfx?.('meow'); playCatReveal(row, col); } else { window.playSfx?.('wrong'); state.wrong.add(key); renderGame('這格沒有貓咪，你被淘汰了。'); } });
 socket.on('match-started', () => { window.playSfx?.('go'); state.cats.clear(); state.marks.clear(); state.wrong.clear(); state.pending.clear(); haptics.pendingTouch.clear(); state.watchingPlayerId = state.room?.players.find(player => !player.spectator)?.id || null; });
