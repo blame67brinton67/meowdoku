@@ -99,18 +99,30 @@ test('only the host, identified by socket, can kick', async () => {
   assert.equal(room(code).players.size, 2);
 });
 
-test('kicked player is told, removed and cannot rejoin until unblocked', async () => {
+test('a plain kick clears the seat but the player may come back', async () => {
   const { code, sockets: [host, guest], ids: [, guestId] } = await makeRoom(['host', 'guest']);
   const kicked = once(guest, 'kicked');
-  const result = await emit(host, 'kick-player', { code, targetId: guestId });
-  assert.equal(result.ok, true);
+  assert.equal((await emit(host, 'kick-player', { code, targetId: guestId })).ok, true);
   assert.match((await kicked).reason, /移出/);
+  assert.equal(room(code).players.has(guestId), false);
+  assert.deepEqual([...room(code).kicked.keys()], []);
+  const again = await client(guest.cookie);
+  assert.equal((await emit(again, 'join-room', { code, name: 'guest' })).ok, true);
+  for (const socket of [host, again]) socket.disconnect();
+});
+
+test('a ban is told, removed and cannot rejoin until unblocked', async () => {
+  const { code, sockets: [host, guest], ids: [, guestId] } = await makeRoom(['host', 'guest']);
+  const kicked = once(guest, 'kicked');
+  const result = await emit(host, 'kick-player', { code, targetId: guestId, ban: true });
+  assert.equal(result.ok, true);
+  assert.match((await kicked).reason, /封鎖/);
   assert.equal(room(code).players.has(guestId), false);
   const again = await client(guest.cookie);
   const rejoin = await emit(again, 'join-room', { code, name: 'guest' });
-  assert.match(rejoin.error, /移出/);
+  assert.match(rejoin.error, /封鎖/);
   const resume = await emit(again, 'resume-room', { code, name: 'guest' });
-  assert.match(resume.error, /移出/);
+  assert.match(resume.error, /封鎖/);
   const unblockForged = await emit(again, 'unblock-player', { code, targetId: guestId });
   assert.match(unblockForged.error, /房主/);
   const unblock = await emit(host, 'unblock-player', { code, targetId: guestId });

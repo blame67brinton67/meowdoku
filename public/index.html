@@ -121,6 +121,18 @@
       <p id="sprint-message" class="message"></p>
     </form>
   </dialog>
+  <dialog id="kick-dialog" aria-labelledby="kick-dialog-title">
+    <form method="dialog" class="dialog-card" id="kick-form">
+      <button type="button" class="close" aria-label="關閉">×</button>
+      <p class="eyebrow">MEMBER</p><h2 id="kick-dialog-title">移出成員</h2>
+      <p class="hint" id="kick-target"></p>
+      <div class="kick-choices">
+        <button type="button" class="copy-button" id="kick-only">踢出（可再加入）</button>
+        <button type="button" class="copy-button danger" id="kick-ban">封鎖（不可再加入）</button>
+      </div>
+      <p class="setting-note wide">封鎖後可在成員列表下方的封鎖名單解除。</p>
+    </form>
+  </dialog>
   <script src="/socket.io/socket.io.js"></script><script src="/sfx.js"></script><script src="/themes.js"></script><script src="/app.js"></script>
 </body>
 </html>

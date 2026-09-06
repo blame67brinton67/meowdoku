@@ -733,7 +733,7 @@ io.on('connection', socket => {
   socket.on('join-room', async ({ code, spectator, password } = {}, callback) => {
     const room = rooms.get(String(code || '').toUpperCase());
     if (!room) return callback({ error: '房間不存在或已關閉' });
-    if (room.kicked.has(playerId)) return callback({ error: '你已被房主移出這個房間，無法再加入' });
+    if (room.kicked.has(playerId)) return callback({ error: '你已被房主封鎖，無法再加入這個房間' });
     const denied = await checkRoomPassword(socket, room, password);
     if (denied) return callback({ error: denied, needsPassword: true });
     if (!socket.connected || rooms.get(room.code) !== room) return callback({ error: '房間不存在或已關閉' });
@@ -890,15 +890,16 @@ io.on('connection', socket => {
     } catch (error) { callback?.({ error: error.message }); }
     finally { room.restartPending = false; if (rooms.get(code) === room) emitRoom(room); }
   });
-  socket.on('kick-player', ({ code, targetId } = {}, callback) => {
+  // A kick only clears the seat; a ban also keeps the seat from coming back.
+  socket.on('kick-player', ({ code, targetId, ban = false } = {}, callback) => {
     const room = rooms.get(code), host = hostBySocket(room, socket);
     if (!host) return callback?.({ error: '只有房主可以移出玩家' });
     const target = room.players.get(targetId);
     if (!target) return callback?.({ error: '找不到這位成員' });
     if (target.id === host.id) return callback?.({ error: '房主不能把自己踢出去' });
-    room.kicked.set(target.id, { id: target.id, name: target.name });
+    if (ban) room.kicked.set(target.id, { id: target.id, name: target.name });
     const targetSocket = target.socketId && io.sockets.sockets.get(target.socketId);
-    if (targetSocket) { targetSocket.emit('kicked', { code: room.code, reason: '你已被房主移出房間' }); targetSocket.leave(room.code); }
+    if (targetSocket) { targetSocket.emit('kicked', { code: room.code, reason: ban ? '你已被房主封鎖，無法再加入這個房間' : '你已被房主移出房間' }); targetSocket.leave(room.code); }
     removePlayer(room, target);
     callback?.({ ok: true });
   });
@@ -930,7 +931,7 @@ io.on('connection', socket => {
   socket.on('resume-room', async ({ code, password } = {}, callback) => {
     const room = rooms.get(String(code || '').toUpperCase());
     if (!room) return callback?.({ error: '房間不存在或已關閉' });
-    if (room.kicked.has(playerId)) return callback?.({ error: '你已被房主移出這個房間，無法再加入' });
+    if (room.kicked.has(playerId)) return callback?.({ error: '你已被房主封鎖，無法再加入這個房間' });
     const player = room.players.get(playerId);
     // A seat that is still held was admitted already; only a fresh seat needs the password.
     if (!player) {

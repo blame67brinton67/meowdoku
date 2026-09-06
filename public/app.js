@@ -843,7 +843,7 @@ function bindRoomButtons() {
     button.disabled = true; button.textContent = '準備中…';
     socket.emit('restart-room', { code: state.room.code, }, result => { if (result?.error) alert(result.error); renderGame(); });
   });
-  document.querySelectorAll('[data-kick]').forEach(button => button.addEventListener('click', () => { const target = state.room.players.find(player => player.id === button.dataset.kick); if (!confirm(`要把 ${target?.name || '這位成員'} 移出房間嗎？他將無法再加入，除非你解除封鎖。`)) return; socket.emit('kick-player', { code: state.room.code, targetId: button.dataset.kick }, result => result?.error && alert(result.error)); }));
+  document.querySelectorAll('[data-kick]').forEach(button => button.addEventListener('click', event => askKick(button.dataset.kick, event.currentTarget)));
   document.querySelectorAll('[data-unblock]').forEach(button => button.addEventListener('click', () => socket.emit('unblock-player', { code: state.room.code, targetId: button.dataset.unblock }, result => result?.error && alert(result.error))));
   document.querySelectorAll('[data-board-view]').forEach(button => button.addEventListener('click', () => { state.boardView = button.dataset.boardView; renderGame(); }));
   document.querySelector('#role-toggle')?.addEventListener('click', () => socket.emit('set-lobby-role', { code: state.room.code, spectator: !state.room.players.find(player => player.id === state.playerId)?.spectator }, result => result?.error && alert(result.error)));
@@ -889,6 +889,17 @@ function bindRoomDialog() {
   document.querySelector('#room-password-clear').addEventListener('click', () => { password.value = ''; updateSettings({ clearPassword: true }); });
   // The board listens on the document and the dialog form would submit on Enter.
   password.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); document.querySelector('#room-password-save').click(); } });
+}
+// Removing somebody is two different decisions, so the host picks which one
+// instead of every kick doubling as a permanent ban.
+function askKick(targetId, opener) {
+  const dialog = document.querySelector('#kick-dialog');
+  const target = state.room.players.find(player => player.id === targetId);
+  dialog.querySelector('#kick-target').textContent = `要把 ${target?.name || '這位成員'} 移出房間嗎？`;
+  const send = ban => { dialog.close(); socket.emit('kick-player', { code: state.room.code, targetId, ban }, result => result?.error && alert(result.error)); };
+  dialog.querySelector('#kick-only').onclick = () => send(false);
+  dialog.querySelector('#kick-ban').onclick = () => send(true);
+  openDialog(dialog, opener);
 }
 function openDialog(dialog, opener) {
   if (!dialog || dialog.open) return;

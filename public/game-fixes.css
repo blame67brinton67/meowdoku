@@ -225,6 +225,11 @@
 #room-group .password-row { display: flex; justify-content: flex-end; gap: 8px; padding: 2px 0 0; }
 #room-group .password-row .copy-button { width: auto; margin: 0; padding: 7px 14px; font-size: 13px; }
 #room-group .setting-note.wide { justify-self: stretch; grid-column: 1 / -1; margin: 8px 0 0; text-align: left; line-height: 1.5; }
+/* Removing a member asks which of the two removals the host meant. */
+#kick-dialog .kick-choices { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+#kick-dialog .kick-choices .copy-button { flex: 1 1 160px; width: auto; margin: 0; }
+#kick-dialog .copy-button.danger { color: var(--danger-text); border-color: rgba(var(--danger-rgb), .5); background: rgba(var(--danger-rgb), .1); }
+#kick-dialog .setting-note.wide { display: block; margin: 12px 0 0; text-align: left; }
 /* Home: the multiplayer card keeps both actions on one line in landscape so
    the history button is never pushed past the card's edge. */
 .mode-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: auto; width: 100%; }
