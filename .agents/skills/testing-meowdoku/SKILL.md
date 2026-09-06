@@ -33,7 +33,47 @@ DISPLAY=:0 wmctrl -i -r <id> -e 0,0,0,800,1200         # left half
 DISPLAY=:0 google-chrome --incognito --new-window http://localhost:3000
 DISPLAY=:0 wmctrl -i -r <id2> -e 0,800,0,800,1200      # right half
 ```
-Set a distinct 玩家 nickname in each window first so podium rows are attributable.
+In newer builds there is no nickname field: a signed-in player shows their account name and a guest
+gets a server-assigned `神秘貓奴・…` alias, so sign in as different accounts when podium rows have to
+be attributable.
+
+## Accounts and admin (newer builds)
+- Newer snapshots need `npm install` before anything (native `better-sqlite3`; accounts/sessions and
+  history live in `data/meowdoku.db`). `data/` is no longer disposable — do not delete it blindly.
+- Register through the header 帳號 / 登入 dialog. Password validation may be length-only (1–72
+  chars), so a 1-character password like `a` can be a valid test credential; read `auth.js`
+  (`PASSWORD_MIN` / `PASSWORD_MAX`) for the current rule instead of assuming 8+.
+- Admin is `users.is_admin` in newer builds, not a shared key: register the account in the UI first,
+  then restart with `ADMIN_BOOTSTRAP_USER=<username> node server.js`; only then does 管理關卡 appear.
+  Older builds still use the `meowdoku-admin` key.
+- Signed-in users get account-bound settings (theme / recentThemes / colorScheme / vibrate) through
+  `POST /api/settings` and `GET /api/auth/me` (`user.settings`). To prove they are server-backed
+  rather than localStorage, log in as the same account in an Incognito/second profile and check the
+  palette plus the 最近使用 row (`#recent-themes` / `#recent-theme-list`). Guests must keep working
+  from localStorage only and must not call `/api/settings` — assert with a `fetch` wrapper counter.
+
+## Room settings dialog (newer builds)
+Board size / 房間類型 / 房間密碼 may live in the host settings dialog (`#sprint-dialog`, opened by
+the gear `#sprint-settings-button`) as `#room-size` / `#room-visibility` / `#room-password` /
+`#room-password-save` / `#room-password-clear`, alongside the sprint controls. Things to check that
+have broken before:
+- `syncSprintDialog()` must target `[data-sprint-mode]`, not the first `.sprint-setting` (the room
+  summary reuses that class and the controls then render blank / `undefined`). Always open the gear
+  dialog on a fresh room and assert `#sprint-mode.value` and `#sprint-value.value` are real values
+  before testing anything else in that dialog.
+- The room panel rerenders on every broadcast, so type an unsaved password, force a broadcast
+  (chat message from the other client) and confirm the field keeps its text and the selects stay
+  current.
+- Non-hosts must not see `#room-group` (and get no gear button at all).
+
+## Layout / no-scroll checks
+Measure `document.scrollingElement.scrollHeight - clientHeight` per state instead of eyeballing
+scrollbars, and check the board really has size: `.board-wrap` uses `container-type: size` and
+`.board { width: min(100cqw, 100cqh) }`, so a zero-height wrapper silently collapses every cell to
+0×0 and the play area looks like an empty panel. Assert
+`document.querySelector('.board').getBoundingClientRect()` is non-trivial in every viewport, in
+particular at ≤900px width where the portrait media query switches `.game-layout` to
+`grid-template-rows: auto minmax(0, 1fr)`.
 
 ## Admin level generation
 Top-right 管理關卡 → key `meowdoku-admin` (or `ADMIN_KEY` env) → name + size → 產生並發布唯一解關卡.
