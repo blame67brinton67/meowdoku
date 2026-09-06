@@ -82,7 +82,14 @@ function applyColorScheme() {
 // A paper / grid colour still equal to either scheme's default is treated as
 // "not customised" and follows the scheme; anything else is the player's.
 const isDefaultColor = (key, value) => value === DEFAULT_THEME[key] || value === DARK_THEME[key];
-const effectiveColor = key => isDefaultColor(key, theme[key]) ? (isDark() ? DARK_THEME : DEFAULT_THEME)[key] : theme[key];
+// Every preset ships both pairings, so a preset's paper follows the scheme too
+// instead of staying light behind a dark UI.
+const presetPair = (preset, dark = isDark()) => dark ? preset.dark : { boardLine: preset.boardLine, paper: preset.paper };
+function effectiveColor(key) {
+  const preset = currentPreset();
+  if (preset) return presetPair(preset)[key];
+  return isDefaultColor(key, theme[key]) ? (isDark() ? DARK_THEME : DEFAULT_THEME)[key] : theme[key];
+}
 function applyTheme() {
   const root = document.documentElement;
   root.style.setProperty('--board-line', effectiveColor('boardLine'));
@@ -93,8 +100,9 @@ function applyTheme() {
 // The selected preset is whichever theme the current colours match exactly, so
 // a single tweaked swatch reads as 自訂 without a second piece of stored state.
 const sameColor = (a, b) => a.toLowerCase() === b.toLowerCase();
-const currentPreset = () => BOARD_THEMES.find(preset => sameColor(preset.boardLine, theme.boardLine) && sameColor(preset.paper, theme.paper) && preset.palette.every((color, index) => sameColor(color, theme.palette[index]))) || null;
-function applyPreset(preset) { theme.palette = preset.palette.slice(); theme.boardLine = preset.boardLine; theme.paper = preset.paper; rememberTheme(preset.id); saveTheme(); syncThemeInputs(); applyTheme(); }
+const matchesPair = preset => [presetPair(preset, false), presetPair(preset, true)].some(pair => sameColor(pair.boardLine, theme.boardLine) && sameColor(pair.paper, theme.paper));
+const currentPreset = () => BOARD_THEMES.find(preset => matchesPair(preset) && preset.palette.every((color, index) => sameColor(color, theme.palette[index]))) || null;
+function applyPreset(preset) { theme.palette = preset.palette.slice(); Object.assign(theme, presetPair(preset)); rememberTheme(preset.id); saveTheme(); syncThemeInputs(); applyTheme(); }
 function renderRecentThemes() {
   const box = document.querySelector('#recent-themes'), list = document.querySelector('#recent-theme-list');
   const presets = recentThemes.map(id => BOARD_THEMES.find(preset => preset.id === id)).filter(Boolean);
@@ -110,7 +118,12 @@ function syncThemeInputs() {
   document.querySelector('#color-scheme').value = readColorScheme();
   syncVibrateToggle();
   const active = currentPreset();
-  document.querySelectorAll('[data-theme-preset]').forEach(button => button.setAttribute('aria-checked', String(button.dataset.themePreset === active?.id)));
+  document.querySelectorAll('[data-theme-preset]').forEach(button => {
+    button.setAttribute('aria-checked', String(button.dataset.themePreset === active?.id));
+    const pair = presetPair(BOARD_THEMES.find(preset => preset.id === button.dataset.themePreset));
+    button.style.setProperty('--paper-swatch', pair.paper);
+    button.style.setProperty('--paper-swatch-ink', isDark() ? '#eceef4' : '#2a2c33');
+  });
   renderRecentThemes();
   document.querySelector('#theme-preset-hint').textContent = active ? `目前：${active.name}。點選後仍可在下方微調單一顏色。` : '目前：自訂。點選主題會覆蓋下方的顏色。';
 }
