@@ -15,8 +15,9 @@
   <main class="shell">
     <header class="topbar">
       <button id="home-button" class="brand" aria-label="返回首頁"><span>◒</span> MeowDoku</button>
-      <span class="player-name" id="guest-badge" hidden>多人房裡的你：<b>神秘貓奴</b></span>
-      <button id="auth-button" class="quiet-button">登入 / 註冊</button><span id="account" class="account" hidden><span id="account-avatar"></span><strong id="account-name"></strong><button id="logout-button" class="quiet-button">登出</button></span><button id="profile-button" class="quiet-button">個人主頁</button><button id="theme-button" class="quiet-button">設定</button><button id="admin-button" class="quiet-button" hidden>管理關卡</button><button id="mute-button" class="quiet-button" aria-label="音效開關">🔊</button>
+      <button id="identity" class="identity" aria-label="開啟個人主頁"><span id="account-avatar"></span><strong id="account-name">神秘貓奴</strong></button>
+      <button id="auth-button" class="quiet-button">登入 / 註冊</button>
+      <span id="account-actions" class="account-actions" hidden><button id="theme-button" class="quiet-button">設定</button><button id="admin-button" class="quiet-button" hidden>管理關卡</button><button id="mute-button" class="quiet-button" aria-label="音效開關">🔊</button><button id="logout-button" class="quiet-button" hidden>登出</button></span>
     </header>
     <section id="view" aria-live="polite"></section>
   </main>

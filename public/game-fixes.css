@@ -165,7 +165,7 @@
     padding: 10px 0;
   }
   .topbar .brand { grid-column: 1 / -1; }
-  .topbar .player-name { min-width: 0; margin-left: 0; }
+  .topbar .identity { min-width: 0; margin-left: 0; justify-content: flex-end; }
   .topbar .quiet-button { align-self: center; white-space: nowrap; }
 }
 
@@ -193,15 +193,15 @@
 
 /* A member row is a crowned/ringed avatar on the left and the name with its
    progress stacked against the right edge. */
-.person-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-bottom: 1px solid var(--divider); border-radius: 10px; font-size: 14px; }
+.person-row { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-bottom: 1px solid var(--divider); border-radius: 10px; font-size: 14px; }
 .person-row.watching { background: rgba(var(--secondary-rgb), .16); box-shadow: inset 0 0 0 1px rgba(var(--secondary-rgb), .32); }
 .person-row.eliminated { color: var(--danger-text); background: rgba(var(--danger-rgb), .14); }
 .person-row.eliminated small, .person-row.eliminated .name-link { color: var(--danger-text); }
 .person-row.newly-eliminated { animation: eliminated-flash .55s ease-out; }
-.person-row .person { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 2px; border-bottom: 0; }
-.person-id { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-end; text-align: right; line-height: 1.3; }
+.person-row .person { display: flex; flex: 0 0 auto; width: auto; align-items: center; gap: 6px; padding: 2px; border-bottom: 0; }
+.person-id { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-end; text-align: right; line-height: 1.25; }
 .person-id strong { font-size: 13px; overflow-wrap: anywhere; }
-.person-id .player-progress { font-size: 10px; color: var(--text-muted); }
+.person-id .player-progress { font-size: 9px; line-height: 1.2; color: var(--text-muted); overflow-wrap: anywhere; }
 .avatar.crowned { position: relative; overflow: visible; }
 .avatar.crowned::after { content: '👑'; position: absolute; top: -11px; left: 50%; transform: translateX(-50%); font-size: 12px; line-height: 1; filter: drop-shadow(0 1px 1px rgba(30, 32, 41, .3)); }
 .avatar.is-me { box-shadow: 0 0 0 2px #2f9e5c; }
