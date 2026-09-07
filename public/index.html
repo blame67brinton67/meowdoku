@@ -17,7 +17,7 @@
       <button id="home-button" class="brand" aria-label="返回首頁"><span>◒</span> MeowDoku</button>
       <button id="identity" class="identity" aria-label="開啟個人主頁"><span id="account-avatar"></span><strong id="account-name">神秘貓奴</strong></button>
       <button id="auth-button" class="quiet-button">登入 / 註冊</button>
-      <span id="account-actions" class="account-actions" hidden><button id="theme-button" class="quiet-button">設定</button><button id="admin-button" class="quiet-button" hidden>管理關卡</button><button id="mute-button" class="quiet-button" aria-label="音效開關">🔊</button><button id="logout-button" class="quiet-button" hidden>登出</button></span>
+      <span id="account-actions" class="account-actions" hidden><button id="theme-button" class="quiet-button">設定</button><button id="admin-button" class="quiet-button" hidden>管理關卡</button><button id="logout-button" class="quiet-button danger" hidden>登出</button></span>
     </header>
     <section id="view" aria-live="polite"></section>
   </main>
@@ -73,6 +73,10 @@
         <div class="setting-row">
           <span class="setting-label"><span id="vibrate-label">觸控震動</span><span class="hint-wrap"><button type="button" class="hint-dot" aria-label="觸控震動說明" aria-describedby="tip-vibrate" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-vibrate">手機上雙擊放置貓咪、滑動劃叉時輕微震動；滑鼠操作不會震動。iOS Safari 不支援震動，此設定在 iPhone 上無效。</span></span></span>
           <button type="button" class="toggle" id="vibrate-toggle" role="switch" aria-checked="true" aria-labelledby="vibrate-label"></button><small class="setting-note" id="vibrate-unsupported" hidden>此裝置不支援震動</small>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label"><span id="mute-label">音效</span><span class="hint-wrap"><button type="button" class="hint-dot" aria-label="音效說明" aria-describedby="tip-mute" aria-expanded="false">?</button><span class="tooltip" role="tooltip" id="tip-mute">放貓咪、倒數與最後衝刺的音效；這個設定只存在這台裝置。</span></span></span>
+          <button type="button" class="quiet-button" id="mute-button" aria-labelledby="mute-label">🔊</button>
         </div>
       </section>
       <section class="setting-group"><p class="eyebrow">自訂顏色</p>

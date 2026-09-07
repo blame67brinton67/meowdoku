@@ -631,9 +631,17 @@ function renderRoomPanel(room, me) {
   const canWatch = Boolean(me?.spectator || me?.alive === false || me?.completedAt);
   const watching = room.players.find(player => player.id === state.watchingPlayerId);
   const live = room.status === 'countdown' || room.status === 'playing';
-  const replay = isHost
-    ? `<button class="${room.status === 'finished' ? 'primary' : 'copy-button'} wide compact" id="restart-room" ${room.restartPending ? 'disabled' : ''}>${room.restartPending ? '準備中…' : room.status === 'finished' ? '用原房號再來一局' : live ? '直接重開這一局' : '換一張新地圖'}</button>${live ? '<small class="restart-hint">進行中重開會作廢本局，不計入積分與最快紀錄。</small>' : ''}`
-    : room.restartPending ? '<p class="waiting">房主正在準備新題目…</p>' : '';
+  // Start and restart sit on one row; the host never needs both at once but the
+  // row keeps them the same width when they do coexist.
+  const startButton = room.status === 'lobby' && isHost
+    ? `<button class="primary compact" id="start-room" ${room.restartPending ? 'disabled' : ''}>開始這局</button>` : '';
+  const restartButton = isHost
+    ? `<button class="${room.status === 'finished' ? 'primary' : 'copy-button'} compact" id="restart-room" ${room.restartPending ? 'disabled' : ''}>${room.restartPending ? '準備中…' : room.status === 'finished' ? '用原房號再來一局' : live ? '直接重開這一局' : '換一張新地圖'}</button>` : '';
+  const hostActions = startButton || restartButton
+    ? `<div class="room-actions">${startButton}${restartButton}</div>${live ? '<small class="restart-hint">進行中重開會作廢本局，不計入積分與最快紀錄。</small>' : ''}` : '';
+  const guestWait = !isHost
+    ? room.restartPending ? '<p class="waiting">房主正在準備新題目…</p>' : room.status === 'lobby' ? '<p class="waiting">等待房主開始遊戲…</p>' : ''
+    : '';
   const blocked = isHost && room.kicked?.length
     ? `<div class="blocked-list"><p class="eyebrow">BLOCKED</p>${room.kicked.map(entry => `<p><span>${escapeHtml(entry.name)}</span><button class="link-button" data-unblock="${escapeHtml(entry.id)}">解除封鎖</button></p>`).join('')}</div>`
     : '';
@@ -681,7 +689,7 @@ function renderRoomPanel(room, me) {
   return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const stat = room.stats?.find(entry => entry.playerId === player.id); const kick = isHost && player.id !== state.playerId ? `<button class="kick-button" data-kick="${escapeHtml(player.id)}" title="移出房間" aria-label="移出 ${escapeHtml(player.name)}">移出</button>` : '';
       // The host wears a crown and you wear a green ring; neither needs a word.
       const badges = `small${player.host ? ' crowned' : ''}${player.id === state.playerId ? ' is-me' : ''}`;
-      return `<div data-player="${escapeHtml(player.id)}" class="person-row ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}"><button class="person" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}${player.host ? ' title="房主"' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span>${avatarHtml(player.avatar, player.frame, badges)}</button><span class="person-id"><strong>${roomNameLink(player.name, player.username)}${stat ? streak(stat) : ''}</strong><small class="player-progress">${progressLine(room, player)}</small></span>${kick}</div>`; }).join('')}</div>${roleToggle}${roomSettings}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? `<button class="primary wide compact" id="start-room" ${room.restartPending ? 'disabled' : ''}>開始這局</button>` : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>` : ''}${replay}${blocked}${leaderboard}${exportMap}<button class="copy-button compact" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+      return `<div data-player="${escapeHtml(player.id)}" class="person-row ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}"><button class="person" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}${player.host ? ' title="房主"' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span>${avatarHtml(player.avatar, player.frame, badges)}</button><span class="person-id"><strong>${roomNameLink(player.name, player.username)}${stat ? streak(stat) : ''}</strong><small class="player-progress">${progressLine(room, player)}</small></span>${kick}</div>`; }).join('')}</div>${roleToggle}${roomSettings}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${hostActions}${guestWait}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>` : ''}${blocked}${leaderboard}${exportMap}<button class="copy-button compact" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
 }
 function progressLine(room, player) {
   const stat = room.stats?.find(entry => entry.playerId === player.id);

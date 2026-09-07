@@ -97,6 +97,7 @@
 .watch-hint { margin: 10px 0 0; color: var(--secondary); font-size: 12px; line-height: 1.5; }
 .role-toggle { width: 100%; margin-top: 10px; padding: 10px; border: 1px dashed rgba(var(--secondary-rgb), .45); border-radius: 999px; background: rgba(var(--surface-rgb), .5); color: var(--secondary); font-weight: 700; transition: background .18s, border-color .18s; }
 .role-toggle:hover { background: var(--surface-solid); border-color: var(--secondary); }
+.room-panel .role-toggle { margin-bottom: 12px; }
 .public-rooms { padding-top: 18px; }
 .public-room-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
 .public-room { display: grid; grid-template-columns: 38px 1fr auto; align-items: center; gap: 11px; padding: 16px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--surface-soft); text-align: left; color: var(--text); transition: transform .18s, box-shadow .18s, border-color .18s; }
@@ -206,6 +207,13 @@
 .avatar.crowned::after { content: '👑'; position: absolute; top: -11px; left: 50%; transform: translateX(-50%); font-size: 12px; line-height: 1; filter: drop-shadow(0 1px 1px rgba(30, 32, 41, .3)); }
 .avatar.is-me { box-shadow: 0 0 0 2px #2f9e5c; }
 .room-panel .compact { align-self: flex-start; width: auto; margin-top: 8px; padding: 6px 12px; font-size: 12px; }
+.room-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.room-actions .compact { flex: 1 1 auto; align-self: stretch; margin-top: 0; }
+.room-panel .sprint-setting { padding: 5px 10px; }
+.room-panel .room-summary + .sprint-setting { margin-top: 4px; }
+#theme-dialog #mute-button { justify-self: end; width: auto; margin: 0; padding: 4px 16px; font-size: 16px; line-height: 26px; }
+.quiet-button.danger { border-color: rgba(var(--danger-rgb), .5); background: rgba(var(--danger-rgb), .85); color: #fff; }
+.quiet-button.danger:hover { background: rgb(var(--danger-rgb)); }
 .pending-note { display: block; margin-top: 2px; color: var(--accent); font-size: 11px; }
 .kick-button { border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; padding: 3px 8px; white-space: nowrap; }
 .kick-button:hover { border-color: #a9262f; color: #a9262f; }
