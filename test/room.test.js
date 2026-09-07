@@ -344,6 +344,18 @@ test('an ordinary guess travels as a counter, not as a room state', async () => 
   assert.ok(Array.isArray((await refreshed).puzzle.regions));
 });
 
+// A light state is matched to the board a client holds by puzzle id, so an
+// idless board would look like every other board — including the next round's.
+test('every round of a room has a board id of its own', async () => {
+  const { code, sockets: [host] } = await makeRoom(['host']);
+  const lobby = compactRoom(room(code), { full: false });
+  assert.equal(typeof lobby.puzzle.id, 'string');
+  assert.ok(lobby.puzzle.id);
+  assert.equal(lobby.puzzle.regions, undefined);
+  assert.equal((await emit(host, 'restart-room', { code })).ok, true);
+  assert.notEqual(compactRoom(room(code), { full: false }).puzzle.id, lobby.puzzle.id);
+});
+
 test('a watched room still broadcasts the boards being watched', async () => {
   const { code, sockets: [host, guest, third], ids: [hostId, guestId] } = await makeRoom(['host', 'guest', 'third']);
   await startMatch(code, host, hostId);

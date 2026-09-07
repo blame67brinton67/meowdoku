@@ -191,13 +191,17 @@ function refillMultiplayerPool(size) {
   };
   setImmediate(addOne);
 }
+// A generated board carries no id, but the light room states are matched to
+// the board a client already holds by id, so every round gets its own.
+const identifyPuzzle = puzzle => ({ ...puzzle, id: nanoid(8) });
+const nextRoundPuzzle = async size => identifyPuzzle(await generateAsync(size));
 async function takeMultiplayerPuzzle(size) {
   const normalizedSize = clampSize(size);
   const index = multiplayerPuzzlePool.findIndex(puzzle => puzzle.size === normalizedSize);
   const puzzle = index < 0 ? await generateAsync(normalizedSize) : multiplayerPuzzlePool.splice(index, 1)[0];
   if (index >= 0) writeJson(PUZZLE_POOL_PATH, multiplayerPuzzlePool);
   refillMultiplayerPool(normalizedSize);
-  return puzzle;
+  return identifyPuzzle(puzzle);
 }
 // Only the derived hash lives on the room, and no payload builder copies it.
 async function hashPassword(password) {
@@ -782,7 +786,7 @@ io.on('connection', socket => {
     if (nextSize) {
       room.restartPending = true; emitRoom(room);
       try {
-        const puzzle = await generateAsync(nextSize);
+        const puzzle = await nextRoundPuzzle(nextSize);
         if (rooms.get(code) !== room || room.status !== 'lobby') return callback?.({ error: '房間狀態已改變，請重新操作' });
         room.puzzle = puzzle;
         io.to(room.code).emit('room-restarted', { message: `房主把棋盤改成 ${nextSize} × ${nextSize}，已換上新題目。` });
@@ -921,7 +925,7 @@ io.on('connection', socket => {
     }
     room.restartPending = true; emitRoom(room);
     try {
-      const puzzle = await generateAsync(nextSize);
+      const puzzle = await nextRoundPuzzle(nextSize);
       if (rooms.get(code) !== room) return callback?.({ error: '房間已關閉' });
       Object.assign(room, changes); room.puzzle = puzzle;
       for (const player of room.players.values()) { player.found.clear(); player.marks.clear(); player.wrong.clear(); player.completedAt = null; player.alive = true; }
@@ -961,7 +965,7 @@ io.on('connection', socket => {
     emitRoom(room); checkAllSpectator(room);
     if (aborted) io.to(room.code).emit('room-restarted', { message: '房主重開了這一局，本局不計分。' });
     try {
-      const puzzle = await generateAsync(nextSize || room.puzzle.size);
+      const puzzle = await nextRoundPuzzle(nextSize || room.puzzle.size);
       if (rooms.get(code) !== room) return callback?.({ error: '房間已關閉' });
       room.puzzle = puzzle; room.round++;
       callback?.({ ok: true });
