@@ -1035,8 +1035,10 @@ function leaveRoom() {
 function mergeRoom(room) {
   const playing = room.status === 'playing' || room.status === 'finished';
   const known = state.room?.code === room.code ? state.room : null;
-  if (!room.puzzle.regions && known?.puzzle?.id === room.puzzle.id) room.puzzle = known.puzzle;
-  else if (!room.puzzle.regions && playing) socket.emit('room-refresh', { code: room.code });
+  if (!room.puzzle.regions) {
+    if (known?.puzzle?.regions && known.puzzle.id === room.puzzle.id) room.puzzle = known.puzzle;
+    else if (playing) socket.emit('room-refresh', { code: room.code });
+  }
   if (!known) return;
   for (const player of room.players) {
     if (player.cats) continue;
