@@ -145,9 +145,6 @@ button { cursor: pointer; }
 #view > * { flex: 1 1 auto; min-height: 0; }
 .brand { background: none; border: 0; font: 700 29px Fredoka, sans-serif; padding: 0; color: var(--text); }
 .brand span { color: var(--accent); font-size: 34px; }
-.player-name { display: flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: 13px; margin-left: auto; }
-.player-name b { color: var(--text); }
-.player-name[hidden] { display: none; }
 .quiet-button, .link-button, .back-button { border: 0; background: transparent; color: var(--text); font-weight: 700; }
 .quiet-button { border: 1px solid var(--border-soft); border-radius: 999px; padding: 9px 15px; background: rgba(var(--surface-rgb), .66); transition: background .18s, border-color .18s, transform .18s; }
 .quiet-button:hover { background: var(--surface-solid); border-color: var(--accent); color: var(--accent); transform: translateY(-1px); }
@@ -353,7 +350,14 @@ dialog::backdrop { background: var(--overlay); backdrop-filter: blur(3px); anima
 .room-leaderboard li { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--divider); font-size: 12px; }
 .room-leaderboard li:last-child { border-bottom: 0; }
 .room-leaderboard li span { color: var(--text-muted); text-align: right; }
-.account{display:inline-flex;align-items:center;gap:8px;font-size:.9rem}.account[hidden]{display:none}
+/* The bar keeps the name hard right; everything it used to hold now lives on
+   the profile page the name opens. */
+.identity{display:inline-flex;align-items:center;gap:8px;margin-left:auto;padding:6px 4px;border:0;background:none;color:var(--text);font:inherit;font-size:.95rem;border-radius:999px}
+.identity strong{font-weight:700}
+.identity:hover strong{color:var(--accent);text-decoration:underline}
+.account-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.account-actions[hidden]{display:none}
+.profile-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px}
 .auth-tabs{display:flex;gap:6px;margin-bottom:14px}
 .auth-tab{flex:1;padding:8px;border:1px solid var(--board-line,#c7cad1);border-radius:999px;background:transparent;cursor:pointer;font:inherit}
 .auth-tab.active{background:var(--ink,#222);color:var(--paper,#fff);border-color:transparent}
@@ -374,7 +378,7 @@ dialog::backdrop { background: var(--overlay); backdrop-filter: blur(3px); anima
 .frame-lightning{border-color:#4fc3f7;border-style:dashed;box-shadow:0 0 0 2px #0277bd,0 0 12px rgba(79,195,247,.9)}
 .frame-rainbow{border-color:transparent;background:linear-gradient(var(--cream),var(--cream)) padding-box,conic-gradient(#c4423d,#c07c12,#8aa625,#159490,#2b6cb0,#6b4b9e,#c4423d) border-box}
 .frame-moon{border-color:#4b5768;background:radial-gradient(circle at 30% 30%,#fffaf1,#dfe6f5);box-shadow:0 0 0 2px #1e2029,0 0 12px rgba(75,87,104,.8)}
-.account .avatar{margin-right:-2px}
+.identity .avatar{margin-right:-2px}
 .leaderboard li{grid-template-columns:30px auto 1fr auto;align-items:center}
 .room-leaderboard li{align-items:center}.room-leaderboard li strong{flex:1}
 .person{grid-template-columns:22px auto 1fr auto}

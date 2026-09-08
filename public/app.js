@@ -188,15 +188,20 @@ function setAuthTab(tab) {
   document.querySelector('#auth-submit').textContent = tab === 'register' ? '註冊帳號' : '登入';
   document.querySelector('#auth-username').focus();
 }
-// The top bar tells a guest what is at stake: nothing of theirs survives a
-// closed tab until they sign in.
+// The top bar carries nothing but the name; settings, the admin panel, sound
+// and signing out live on the page that name opens.
+// The buttons travel in and out of the page, so they are held by reference:
+// a detached node is invisible to document.querySelector.
+const accountActions = document.querySelector('#account-actions');
+const logoutButton = accountActions.querySelector('#logout-button');
+const adminButton = accountActions.querySelector('#admin-button');
 function renderAuth() {
-  const button = document.querySelector('#auth-button'), account = document.querySelector('#account');
   const isUser = Boolean(state.user);
-  button.hidden = isUser; account.hidden = !isUser;
-  document.querySelector('#guest-badge').hidden = isUser;
-  if (isUser) { document.querySelector('#account-name').textContent = state.user.displayName; document.querySelector('#account-avatar').innerHTML = avatarHtml(state.user.avatar, state.user.frame, 'small'); }
-  document.querySelector('#admin-button').hidden = !state.user?.isAdmin;
+  document.querySelector('#auth-button').hidden = isUser;
+  document.querySelector('#account-name').textContent = isUser ? state.user.displayName : '神秘貓奴';
+  document.querySelector('#account-avatar').innerHTML = isUser ? avatarHtml(state.user.avatar, state.user.frame, 'small') : '';
+  logoutButton.hidden = !isUser;
+  adminButton.hidden = !state.user?.isAdmin;
   document.querySelector('#guest-notice').textContent = state.guest?.notice || '';
 }
 async function loadIdentity() {
@@ -217,7 +222,15 @@ document.querySelector('#auth-form').addEventListener('submit', async event => {
     window.location.reload();
   } catch (error) { message.textContent = error.message; button.disabled = false; }
 });
-document.querySelector('#profile-button').addEventListener('click', () => openProfile());
+document.querySelector('#identity').addEventListener('click', () => openProfile());
+// The action buttons are one set of live nodes, parked outside the page while
+// no profile is on screen and moved back in when one renders.
+function mountAccountActions() {
+  const slot = document.querySelector('#profile-actions');
+  if (!slot) return;
+  slot.append(accountActions);
+  accountActions.hidden = false;
+}
 // Every name rendered with data-profile opens that account's page, wherever it
 // appears, so the room list and leaderboards need no handlers of their own.
 document.addEventListener('click', event => {
@@ -618,9 +631,17 @@ function renderRoomPanel(room, me) {
   const canWatch = Boolean(me?.spectator || me?.alive === false || me?.completedAt);
   const watching = room.players.find(player => player.id === state.watchingPlayerId);
   const live = room.status === 'countdown' || room.status === 'playing';
-  const replay = isHost
-    ? `<button class="${room.status === 'finished' ? 'primary' : 'copy-button'} wide compact" id="restart-room" ${room.restartPending ? 'disabled' : ''}>${room.restartPending ? '準備中…' : room.status === 'finished' ? '用原房號再來一局' : live ? '直接重開這一局' : '換一張新地圖'}</button>${live ? '<small class="restart-hint">進行中重開會作廢本局，不計入積分與最快紀錄。</small>' : ''}`
-    : room.restartPending ? '<p class="waiting">房主正在準備新題目…</p>' : '';
+  // Start and restart sit on one row; the host never needs both at once but the
+  // row keeps them the same width when they do coexist.
+  const startButton = room.status === 'lobby' && isHost
+    ? `<button class="primary compact" id="start-room" ${room.restartPending ? 'disabled' : ''}>開始這局</button>` : '';
+  const restartButton = isHost
+    ? `<button class="${room.status === 'finished' ? 'primary' : 'copy-button'} compact" id="restart-room" ${room.restartPending ? 'disabled' : ''}>${room.restartPending ? '準備中…' : room.status === 'finished' ? '用原房號再來一局' : live ? '直接重開這一局' : '換一張新地圖'}</button>` : '';
+  const hostActions = startButton || restartButton
+    ? `<div class="room-actions">${startButton}${restartButton}</div>${live ? '<small class="restart-hint">進行中重開會作廢本局，不計入積分與最快紀錄。</small>' : ''}` : '';
+  const guestWait = !isHost
+    ? room.restartPending ? '<p class="waiting">房主正在準備新題目…</p>' : room.status === 'lobby' ? '<p class="waiting">等待房主開始遊戲…</p>' : ''
+    : '';
   const blocked = isHost && room.kicked?.length
     ? `<div class="blocked-list"><p class="eyebrow">BLOCKED</p>${room.kicked.map(entry => `<p><span>${escapeHtml(entry.name)}</span><button class="link-button" data-unblock="${escapeHtml(entry.id)}">解除封鎖</button></p>`).join('')}</div>`
     : '';
@@ -668,7 +689,7 @@ function renderRoomPanel(room, me) {
   return `<aside class="room-panel"><div><p class="eyebrow">${room.status.toUpperCase()}</p><h2>房間成員</h2></div><div class="people">${room.players.map(player => { const flash = player.id === state.deathFlashId && !state.deathFlashRendered ? ' newly-eliminated' : ''; const stat = room.stats?.find(entry => entry.playerId === player.id); const kick = isHost && player.id !== state.playerId ? `<button class="kick-button" data-kick="${escapeHtml(player.id)}" title="移出房間" aria-label="移出 ${escapeHtml(player.name)}">移出</button>` : '';
       // The host wears a crown and you wear a green ring; neither needs a word.
       const badges = `small${player.host ? ' crowned' : ''}${player.id === state.playerId ? ' is-me' : ''}`;
-      return `<div data-player="${escapeHtml(player.id)}" class="person-row ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}"><button class="person" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}${player.host ? ' title="房主"' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span>${avatarHtml(player.avatar, player.frame, badges)}</button><span class="person-id"><strong>${roomNameLink(player.name, player.username)}${stat ? streak(stat) : ''}</strong><small class="player-progress">${progressLine(room, player)}</small></span>${kick}</div>`; }).join('')}</div>${roleToggle}${roomSettings}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${room.status === 'lobby' ? (isHost ? `<button class="primary wide compact" id="start-room" ${room.restartPending ? 'disabled' : ''}>開始這局</button>` : '<p class="waiting">等待房主開始遊戲…</p>') : ''}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>` : ''}${replay}${blocked}${leaderboard}${exportMap}<button class="copy-button compact" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
+      return `<div data-player="${escapeHtml(player.id)}" class="person-row ${!player.alive && !player.spectator ? 'eliminated' : ''}${flash} ${canWatch && player.id === state.watchingPlayerId ? 'watching' : ''}"><button class="person" data-watch="${player.id}" ${!canWatch || player.spectator ? 'disabled' : ''}${player.host ? ' title="房主"' : ''}><span>${player.idle ? '⏾' : player.spectator ? '◉' : player.alive ? '♟' : '×'}</span>${avatarHtml(player.avatar, player.frame, badges)}</button><span class="person-id"><strong>${roomNameLink(player.name, player.username)}${stat ? streak(stat) : ''}</strong><small class="player-progress">${progressLine(room, player)}</small></span>${kick}</div>`; }).join('')}</div>${roleToggle}${roomSettings}${sprintSetting}${canWatch && room.status === 'playing' ? `<p class="watch-hint">正在觀看：<b>${escapeHtml(watching?.name || '選擇一位玩家')}</b></p>` : ''}${hostActions}${guestWait}${room.status === 'finished' ? `<div class="results"><p class="eyebrow">RESULTS</p>${(window.lastResults || []).map(row => `<p><b>#${row.rank}</b> ${escapeHtml(row.name)} <span>${row.time}s</span></p>`).join('') || '<p>沒有完成者</p>'}</div>` : ''}${blocked}${leaderboard}${exportMap}<button class="copy-button compact" id="copy-room">複製房間碼 ${room.code}</button></aside>`;
 }
 function progressLine(room, player) {
   const stat = room.stats?.find(entry => entry.playerId === player.id);
@@ -1194,7 +1215,8 @@ async function showProfile(username = null) {
   const back = '<button class="back-button" id="back">← 首頁</button>';
   if (!own) return showPublicProfile(username, back);
   if (!state.user) {
-    view.innerHTML = `<div class="page"><section class="page-heading">${back}<p class="eyebrow">PROFILE</p><h1>個人主頁</h1></section><div class="page-body"><section class="panel profile-guest"><h2>登入才能保存</h2><p>你目前是訪客。訪客的進度與對戰紀錄在關閉網頁後不會保留，成就、頭像與相框也需要帳號才能解鎖。登入或註冊後，這次的進度會自動併入帳號。</p><button class="primary" id="profile-login">登入 / 註冊</button></section></div></div>`;
+    view.innerHTML = `<div class="page"><section class="page-heading">${back}<p class="eyebrow">PROFILE</p><h1>個人主頁</h1></section><div class="page-body"><section class="panel profile-guest"><h2>登入才能保存</h2><p>你目前是訪客。訪客的進度與對戰紀錄在關閉網頁後不會保留，成就、頭像與相框也需要帳號才能解鎖。登入或註冊後，這次的進度會自動併入帳號。</p><button class="primary" id="profile-login">登入 / 註冊</button></section><section class="panel profile-actions" id="profile-actions"><p class="eyebrow">ACCOUNT</p><h2>設定與工具</h2></section></div></div>`;
+    mountAccountActions();
     document.querySelector('#back').onclick = home;
     document.querySelector('#profile-login').onclick = () => document.querySelector('#auth-button').click();
     return;
@@ -1218,11 +1240,13 @@ async function showProfile(username = null) {
         <form class="profile-name-form" id="profile-name-form"><label for="display-name">顯示名稱</label><input id="display-name" maxlength="20" value="${escapeHtml(profile.user.displayName)}" /><button class="quiet-button" type="submit">儲存</button></form>
         <p class="eyebrow">AVATAR</p><div class="picker" id="avatar-picker">${profile.avatars.map(avatar => `<button type="button" class="pick ${avatar === (profile.user.avatar || DEFAULT_AVATAR) ? 'selected' : ''}" data-avatar="${escapeHtml(avatar)}">${escapeHtml(avatar)}</button>`).join('')}</div>
         <p class="eyebrow">FRAME</p><div class="picker" id="frame-picker">${profile.frames.map(frame => `<button type="button" class="pick ${frame.id === (profile.user.frame || 'plain') ? 'selected' : ''} ${frame.unlocked ? '' : 'locked'}" data-frame="${escapeHtml(frame.id)}" ${frame.unlocked ? '' : 'disabled'} title="${escapeHtml(frame.unlocked ? frame.name : `${frame.name}：達成「${frame.achievement}」後解鎖`)}">${avatarHtml(profile.user.avatar, frame.id)}<small>${escapeHtml(frame.name)}</small></button>`).join('')}</div>
-        <small class="profile-message" id="profile-message"></small></article>
+        <small class="profile-message" id="profile-message"></small>
+        <div class="profile-actions" id="profile-actions"></div></article>
       <article class="panel"><p class="eyebrow">SINGLE PLAYER</p><h2>單人進度</h2><p class="big-number"><b>${levels.filter(level => cleared.has(level.id)).length}</b> / ${levels.length} 關</p><p>目前進行到：<b>${current}</b></p><ol class="chapter-list">${chapterRows.join('') || '<li><span class="empty">難度階梯正在產生。</span></li>'}</ol></article>
       <article class="panel"><p class="eyebrow">ACHIEVEMENTS</p><h2>成就 <small>${unlockedCount} / ${profile.achievements.length}</small></h2><ul class="achievement-list">${profile.achievements.map(a => `<li class="${a.unlockedAt ? 'unlocked' : 'locked'}"><span class="badge">${a.unlockedAt ? '🏅' : '🔒'}</span><div><strong>${escapeHtml(a.name)}</strong><small>${escapeHtml(a.description)}${a.frame ? ` · 獎勵相框「${escapeHtml(frameById.get(a.frame)?.name || a.frame)}」` : ''}</small>${a.unlockedAt ? `<small class="when">${escapeHtml(matchDate(a.unlockedAt))} 解鎖</small>` : ''}</div></li>`).join('')}</ul></article>
       <article class="panel profile-history"><p class="eyebrow">MATCH HISTORY</p><h2>歷史比賽 <small>${profile.stats.matches} 場 · ${profile.stats.wins} 次第一</small></h2>${history.length ? `<table class="history-table"><thead><tr><th>日期</th><th>房名</th><th>尺寸</th><th>結果</th></tr></thead><tbody>${history.map(record => `<tr><td>${escapeHtml(matchDate(record.finishedAt))}</td><td>${escapeHtml(record.roomName)}</td><td>${record.size} × ${record.size}</td><td class="${escapeHtml(record.outcome?.status || '')}">${record.outcome ? escapeHtml(outcomeLabel(record.outcome)) : '未完成'}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">還沒有對戰紀錄。</p>'}</article>
     </section></div></div>`;
+  mountAccountActions();
   document.querySelector('#back').onclick = home;
   const message = document.querySelector('#profile-message');
   const save = async body => {
