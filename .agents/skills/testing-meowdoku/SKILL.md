@@ -184,6 +184,58 @@ then run with `MEOW_TEST_DELAY=1200 node server.js`.
   window is focused. Run DOM assertions in the normal window, or verify the Incognito side from
   screenshots only.
 
+## Theme / colour-scheme testing (外觀 dialog)
+Path: header 設定 (`#theme-button`) → `#color-scheme` (跟隨系統 / 亮色 / 暗色) → preset buttons
+`[data-theme-preset]` → hint `#theme-preset-hint` (`目前：<name>` vs `目前：自訂`) → single-colour
+pickers `[data-theme-key="boardLine"]` / `[data-theme-key="paper"]` → `#reset-theme` (重設顏色).
+Recent presets: `#recent-themes` / `#recent-theme-list`.
+- Objective assertion per state (fine to read in the console; do the clicking in the UI):
+  `getComputedStyle(document.documentElement).getPropertyValue('--paper')` and `--board-line`,
+  plus `getComputedStyle(document.body).backgroundColor` for the painted page, and
+  `document.documentElement.dataset.theme` for the resolved scheme.
+- Newer builds give every preset in `public/themes.js` a `dark: { boardLine, paper }` pair; a
+  preset must stay `aria-checked` (hint not 自訂) when the stored pair matches EITHER scheme, and
+  the preset buttons preview the active scheme's paper via `--paper-swatch`.
+- Persistence: `localStorage.meowdokuTheme` / `meowdokuColorScheme` / `meowdokuRecentThemes`;
+  signed-in users also `POST /api/settings` (read back from `GET /api/auth/me`), so cross-profile
+  checks need ~1 s before logging in elsewhere.
+- Native `<input type="color">` dialogs are painful to drive. To set up a *stored* colour pair
+  precondition (e.g. "light pair stored while dark scheme is active"), seed
+  `localStorage.meowdokuTheme` + `meowdokuColorScheme` and reload, then perform the actual edit
+  under test through the picker UI. Disclose that seeding in the report.
+- Regression worth repeating: solo `.board` bounding box must be non-zero in BOTH schemes, and in
+  dark mode the 貓咪守則 rule card goes dark-bg/light-ink while the 💡 HINT card stays cream with
+  dark ink — check both, they use different tokens.
+
+## Getting cat / × / error visuals without racing (legibility screenshots)
+Practice mode is the cheapest way to photograph a 🐈, a personal × mark and the red wrong-click
+ring on one large board: play any multiplayer match (even losing instantly), then 首頁 →
+對戰紀錄（重新解題）→ 重新解這張圖. Practice replays the exact board, wrong clicks only warn
+(`這格沒有貓咪，再想想。`) instead of eliminating, so a handful of spread-out left-clicks reliably
+yields both cats and red error cells; right-click adds the white × mark. 💡 提示 gives a technique
+tip, not a revealed cat, and is limited to 3/day.
+
+## Multiplayer room / reconnect testing
+- Room codes are 5 chars; the room URL is `/multi/<CODE>` and the server serves that path, so a
+  direct load or F5 on it is a valid test of the client's deep-link join.
+- Watch for uncaught page errors with a hook installed in the console-bound window:
+  `window.__pageErrors=[]; addEventListener('error',e=>__pageErrors.push(String(e.message)));`
+  plus an `unhandledrejection` listener. Re-check `typeof window.__pageErrors` before trusting an
+  empty array — the hook can silently disappear (page re-created), in which case reinstall it and
+  also read the plain console log.
+- Reloading `/multi/<CODE>` **mid-match** does not restore the seat: `joinRoom()` deletes and
+  recreates the player with empty `found`/`marks`, and `join-room` forces
+  `spectator: room.status !== 'lobby'`. So the returning player paints the room but appears as 觀戰
+  with no cats/× marks. Expect this (it may be intended reconnect behaviour); do not read it as a
+  rendering/blank-page bug, but do call it out when a task expects marks to come back.
+- Stale-board checks across rounds: compare `state.room.puzzle.id` **and** a region signature
+  (`state.room.puzzle.regions.flat().join('')`) before/after 換一張新地圖 / 重開, and screenshot both
+  windows — region colours differ per theme, so compare the *grouping shape*, not the hues.
+- Private room + password: create with 房間類型 = 私人房間, then the room gear ⚙ (`aria-label="房間設定"`)
+  → 房間密碼 → 設定密碼 (summary flips to `🔒 需要密碼`). Joining by key then triggers a native
+  `window.prompt`; a wrong value produces a native alert `房間密碼不正確`. Drive both with
+  type + click on the dialog buttons.
+
 ## Known cosmetic quirks (verify before reporting as new bugs)
 - A spectator's status line still reads 找到 0 / 7 隻貓咪 rather than a spectating label.
 - After a server restart, an open room screen stays on screen until reloaded.
