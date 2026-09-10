@@ -44,6 +44,7 @@ const LADDER_PATH = path.join(DATA_DIR, 'ladder.json');
 const HINT_QUOTA_PATH = path.join(DATA_DIR, 'hint-quota.json');
 const LEVEL_ORDER_PATH = path.join(DATA_DIR, 'level-order.json');
 const LEADERBOARD_TOP = 5;
+const LEADERBOARD_MAX = 100;
 const rooms = new Map();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -244,11 +245,11 @@ function scoreRows() {
 }
 // Competition ranking: equal scores share a rank and the next rank skips.
 // Only accounts get a rank of their own; guests are told to sign in instead.
-function leaderboardFor(identity) {
+function leaderboardFor(identity, limit = LEADERBOARD_TOP) {
   const rows = scoreRows();
   const rankOf = cleared => rows.filter(row => row.cleared > cleared).length + 1;
   const myKey = identity?.kind === 'user' ? `u:${identity.id}` : null;
-  const top = rows.slice(0, LEADERBOARD_TOP).map(row => ({ rank: rankOf(row.cleared), name: row.name, username: row.username, cleared: row.cleared, avatar: row.avatar, frame: row.frame, me: row.key === myKey }));
+  const top = rows.slice(0, limit).map(row => ({ rank: rankOf(row.cleared), name: row.name, username: row.username, cleared: row.cleared, avatar: row.avatar, frame: row.frame, me: row.key === myKey }));
   let me = null;
   if (myKey) {
     const mine = rows.find(row => row.key === myKey);
@@ -313,7 +314,12 @@ app.get('/api/levels/:id', (req, res) => {
   if (!level) return res.status(404).json({ error: '找不到關卡' });
   res.json(level); // Single-player boards need the local answer for instant feedback.
 });
-app.get('/api/leaderboard', (req, res) => res.json(leaderboardFor(req.identity)));
+// The home page shows a short list; /rank asks for the whole board.
+app.get('/api/leaderboard', (req, res) => {
+  const asked = Number.parseInt(req.query.limit, 10);
+  const limit = Number.isFinite(asked) ? Math.min(Math.max(asked, 1), LEADERBOARD_MAX) : LEADERBOARD_TOP;
+  res.json(leaderboardFor(req.identity, limit));
+});
 app.get('/api/public-rooms', (_req, res) => {
   const visibleRooms = [...rooms.values()]
     // A finished room stays listed: it is where the next round happens.
@@ -1033,9 +1039,10 @@ function joinRoom(socket, room, { playerId, kind, spectator }) {
   if (room.status === 'finished') socket.emit('game-finished', { results: orderedResults(room) });
 }
 
-// The client routes /single/<id>, /multi/<code> and /profile/<user> itself, so
-// a deep link (or a refresh on one) has to be served the same page.
-app.get(['/single/:id', '/multi/:code', '/profile', '/profile/:username'], (req, res) => {
+// The client routes /single/<id>, /multi/<code>, /profile/<user>, /rank and
+// /user/history itself, so a deep link (or a refresh on one) has to be served
+// the same page.
+app.get(['/single/:id', '/multi/:code', '/profile', '/profile/:username', '/rank', '/user/history'], (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 

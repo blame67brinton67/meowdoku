@@ -376,13 +376,18 @@ async function home() {
   view.innerHTML = `<div class="home">
     <section class="hero"><div><p class="eyebrow">A LITTLE LOGIC GAME</p><h1>幫每隻貓咪<br><em>找到牠的地盤</em></h1><p>每行、每列與每個色塊都只能住一隻貓。不要點錯，貓咪的尊嚴很脆弱。</p></div><div class="hero-cat" aria-hidden="true">=^･ω･^=</div></section>
     <section class="mode-grid"><article class="mode-card solo"><span class="mode-icon">⌁</span><p class="eyebrow">SOLO MODE</p><h2>獨自推理</h2><p>挑一個關卡，慢慢找到唯一的答案。</p><button class="primary" id="open-solo">選擇關卡</button></article>
-    <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><div class="mode-actions"><button class="dark-button" id="open-multi">進入多人遊戲</button><button class="link-button" id="open-history">對戰紀錄（重新解題）</button></div></article></section>
+    <article class="mode-card multi"><span class="mode-icon">♟</span><p class="eyebrow">MULTIPLAYER</p><h2>貓奴同樂會</h2><p>建立房間、邀朋友進來，一起衝刺。</p><div class="mode-actions"><button class="dark-button" id="open-multi">進入多人遊戲</button></div></article></section>
     <section class="lower-grid"><article class="panel continue-panel"><div><p class="eyebrow">SINGLE PLAYER</p><h2>接著挑戰</h2><p>${!nextLevel ? '難度階梯正在產生，稍等幾秒再回來。' : nextIndex === -1 ? '所有罐罐都找到了，真是傳奇貓奴。' : '解完前一關，下一盒罐罐正在等你。'}</p></div><div class="continue-level"><span>${continueLabel}</span><strong>${nextLevel ? escapeHtml(nextLevel.name) : '尚未有關卡'}</strong><small>${nextLevel ? `${nextLevel.size} × ${nextLevel.size}` : '貓咪還在畫地圖'}</small>${nextLevel ? ratingLine(nextLevel.rating) : ''}</div><button class="primary" id="continue-solo" ${nextLevel ? '' : 'disabled'}>${nextIndex === -1 ? '再次挑戰 →' : '繼續解題 →'}</button><button class="link-button" id="open-solo-2">查看全部關卡</button></article>
-    <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboard.top.length ? `<ol>${leaderboard.top.map(entry => `<li class="${entry.me ? 'me' : ''}"><span>${entry.rank}</span>${avatarHtml(entry.avatar, entry.frame, 'small')}<strong>${nameLink(entry.name, entry.username)}${entry.me ? '（你）' : ''}</strong><b>${entry.cleared} 關</b></li>`).join('')}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}${myRankLine(leaderboard)}</article></section></div>`;
+    <article class="panel leaderboard"><div><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2></div>${leaderboardBody(leaderboard)}<button class="link-button" id="open-rank">查看完整排行榜</button></article></section></div>`;
   document.querySelector('#open-solo').onclick = showLevels; document.querySelector('#open-solo-2').onclick = showLevels;
   document.querySelector('#open-multi').onclick = showMultiplayer;
-  document.querySelector('#open-history').onclick = showHistory;
+  document.querySelector('#open-rank').onclick = showRank;
   if (nextLevel) document.querySelector('#continue-solo').onclick = () => startSingle(nextLevel.id);
+}
+// The same list on the home page, the /rank page and a profile page.
+function leaderboardBody(leaderboard) {
+  const rows = leaderboard.top.map(entry => `<li class="${entry.me ? 'me' : ''}"><span>${entry.rank}</span>${avatarHtml(entry.avatar, entry.frame, 'small')}<strong>${nameLink(entry.name, entry.username)}${entry.me ? '（你）' : ''}</strong><b>${entry.cleared} 關</b></li>`).join('');
+  return `${rows ? `<ol>${rows}</ol>` : '<p class="empty">第一位破關的人，會留在這裡。</p>'}${myRankLine(leaderboard)}`;
 }
 // A guest has no page of their own, so only accounts become links.
 function nameLink(name, username) {
@@ -427,7 +432,15 @@ async function startSingle(id) {
   state.singleStartedAt = Date.now();
   resetBoard(); renderGame(); loadHintQuota();
 }
+async function showRank() {
+  navigate('/rank');
+  const leaderboard = await api('/api/leaderboard?limit=100');
+  dropRoom(); state.mode = 'rank'; state.single = null; state.practice = null;
+  view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">CAT HALL OF FAME</p><h1>單人排行榜</h1><p>依通關數排名，共 ${leaderboard.total} 位貓奴。點名字可以看那個人的主頁。</p></section><div class="page-body"><section class="panel leaderboard rank-page">${leaderboardBody(leaderboard)}</section></div></div>`;
+  document.querySelector('#back').onclick = home;
+}
 async function showHistory() {
+  navigate('/user/history');
   const records = await api('/api/history/me');
   dropRoom(); state.mode = 'history'; state.practice = null;
   view.innerHTML = `<div class="page"><section class="page-heading"><button class="back-button" id="back">← 首頁</button><p class="eyebrow">MATCH HISTORY</p><h1>對戰紀錄</h1><p>點選任一場對戰，重新打開那張地圖慢慢解。練習不計入單人進度與排行榜。</p></section><div class="page-body"><section class="level-catalog">${records.length ? records.map(record => `<article class="catalog-card"><span>${escapeHtml(matchDate(record.finishedAt))} · ROOM ${escapeHtml(record.code)}</span><h2>${escapeHtml(record.roomName)}</h2><p>${record.size} × ${record.size}，你：${escapeHtml(outcomeLabel(record.outcome))}；冠軍：${record.results[0] ? `${escapeHtml(record.results[0].name)} ${record.results[0].time}s` : '無人完成'}</p><button class="primary" data-match="${escapeHtml(record.matchId)}">重新解這張圖</button></article>`).join('') : '<p class="empty">還沒有對戰紀錄。去多人房間跑一場，這裡就會留下地圖。</p>'}</section></div></div>`;
@@ -1188,10 +1201,13 @@ function showAchievementToast(list) {
 }
 
 // Every page has a real address — /single/<關卡>, /multi/<房號>,
-// /profile/<帳號> — so links are shareable and the back button walks between
-// pages by itself. The server serves index.html for all three.
+// /profile/<帳號>, /rank, /user/history — so links are shareable and the back
+// button walks between pages by itself. The server serves index.html for all
+// of them.
 const ROUTES = [
   ['profile', /^\/profile(?:\/([A-Za-z0-9_-]{1,32}))?\/?$/],
+  ['rank', /^\/rank\/?$/],
+  ['history', /^\/user\/history\/?$/],
   ['single', /^\/single\/([A-Za-z0-9_-]{1,64})\/?$/],
   ['multi', /^\/multi\/([A-Za-z0-9]{1,8})\/?$/]
 ];
@@ -1214,6 +1230,8 @@ function openProfile(username = null) {
 function applyRoute() {
   const { name, param } = currentRoute();
   if (name === 'profile') return showProfile(param);
+  if (name === 'rank') return showRank();
+  if (name === 'history') return showHistory();
   if (name === 'single') return startSingle(param);
   if (name === 'multi') {
     if (state.room?.code === param) return renderGame();
@@ -1244,7 +1262,7 @@ async function showProfile(username = null) {
     document.querySelector('#profile-login').onclick = () => document.querySelector('#auth-button').click();
     return;
   }
-  const [profile, levels, history] = await Promise.all([api('/api/profile/me'), api('/api/levels'), api('/api/history/me')]);
+  const [profile, levels, history, leaderboard] = await Promise.all([api('/api/profile/me'), api('/api/levels'), api('/api/history/me'), api('/api/leaderboard?limit=100')]);
   state.user = profile.user; renderAuth();
   const cleared = new Set(profile.cleared);
   const nextIndex = levels.findIndex(level => !cleared.has(level.id));
@@ -1267,9 +1285,13 @@ async function showProfile(username = null) {
         <div class="profile-actions" id="profile-actions"></div></article>
       <article class="panel"><p class="eyebrow">SINGLE PLAYER</p><h2>單人進度</h2><p class="big-number"><b>${levels.filter(level => cleared.has(level.id)).length}</b> / ${levels.length} 關</p><p>目前進行到：<b>${current}</b></p><ol class="chapter-list">${chapterRows.join('') || '<li><span class="empty">難度階梯正在產生。</span></li>'}</ol></article>
       <article class="panel"><p class="eyebrow">ACHIEVEMENTS</p><h2>成就 <small>${unlockedCount} / ${profile.achievements.length}</small></h2><ul class="achievement-list">${profile.achievements.map(a => `<li class="${a.unlockedAt ? 'unlocked' : 'locked'}"><span class="badge">${a.unlockedAt ? '🏅' : '🔒'}</span><div><strong>${escapeHtml(a.name)}</strong><small>${escapeHtml(a.description)}${a.frame ? ` · 獎勵相框「${escapeHtml(frameById.get(a.frame)?.name || a.frame)}」` : ''}</small>${a.unlockedAt ? `<small class="when">${escapeHtml(matchDate(a.unlockedAt))} 解鎖</small>` : ''}</div></li>`).join('')}</ul></article>
-      <article class="panel profile-history"><p class="eyebrow">MATCH HISTORY</p><h2>歷史比賽 <small>${profile.stats.matches} 場 · ${profile.stats.wins} 次第一</small></h2>${history.length ? `<table class="history-table"><thead><tr><th>日期</th><th>房名</th><th>尺寸</th><th>結果</th></tr></thead><tbody>${history.map(record => `<tr><td>${escapeHtml(matchDate(record.finishedAt))}</td><td>${escapeHtml(record.roomName)}</td><td>${record.size} × ${record.size}</td><td class="${escapeHtml(record.outcome?.status || '')}">${record.outcome ? escapeHtml(outcomeLabel(record.outcome)) : '未完成'}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">還沒有對戰紀錄。</p>'}</article>
+      <article class="panel leaderboard profile-rank"><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2>${leaderboardBody(leaderboard)}<button class="link-button" id="open-rank">完整排行榜</button></article>
+      <article class="panel profile-history"><p class="eyebrow">MATCH HISTORY</p><h2>歷史比賽 <small>${profile.stats.matches} 場 · ${profile.stats.wins} 次第一</small></h2>${history.length ? `<table class="history-table"><thead><tr><th>日期</th><th>房名</th><th>尺寸</th><th>結果</th><th></th></tr></thead><tbody>${history.map(record => `<tr><td>${escapeHtml(matchDate(record.finishedAt))}</td><td>${escapeHtml(record.roomName)}</td><td>${record.size} × ${record.size}</td><td class="${escapeHtml(record.outcome?.status || '')}">${record.outcome ? escapeHtml(outcomeLabel(record.outcome)) : '未完成'}</td><td><button type="button" class="quiet-button" data-match="${escapeHtml(record.matchId)}">重新解題</button></td></tr>`).join('')}</tbody></table>` : '<p class="empty">還沒有對戰紀錄。去多人房間跑一場，這裡就會留下地圖。</p>'}<button class="link-button" id="open-history">對戰紀錄（重新解題）</button></article>
     </section></div></div>`;
   mountAccountActions();
+  document.querySelector('#open-rank').onclick = showRank;
+  document.querySelector('#open-history').onclick = showHistory;
+  document.querySelectorAll('[data-match]').forEach(button => button.onclick = () => startPractice(history.find(record => record.matchId === button.dataset.match)));
   document.querySelector('#back').onclick = home;
   const message = document.querySelector('#profile-message');
   const save = async body => {
@@ -1284,8 +1306,8 @@ async function showProfile(username = null) {
 // Someone else's page: the same panels without the editing controls, and with
 // the match rows the server hands out publicly (no boards to upsolve from).
 async function showPublicProfile(username, back) {
-  let profile, levels;
-  try { [profile, levels] = await Promise.all([api(`/api/profile/${encodeURIComponent(username)}`), api('/api/levels')]); }
+  let profile, levels, leaderboard;
+  try { [profile, levels, leaderboard] = await Promise.all([api(`/api/profile/${encodeURIComponent(username)}`), api('/api/levels'), api('/api/leaderboard?limit=100')]); }
   catch (error) {
     view.innerHTML = `<div class="page"><section class="page-heading">${back}<p class="eyebrow">PROFILE</p><h1>看不到這位貓奴</h1><p>${escapeHtml(error.message)}</p></section></div>`;
     document.querySelector('#back').onclick = home;
@@ -1307,9 +1329,11 @@ async function showPublicProfile(username, back) {
         <small class="profile-message" id="profile-message"></small></article>
       <article class="panel"><p class="eyebrow">SINGLE PLAYER</p><h2>單人進度</h2><p class="big-number"><b>${levels.filter(level => cleared.has(level.id)).length}</b> / ${levels.length} 關</p><ol class="chapter-list">${chapterRows.join('') || '<li><span class="empty">難度階梯正在產生。</span></li>'}</ol></article>
       <article class="panel"><p class="eyebrow">ACHIEVEMENTS</p><h2>成就 <small>${unlocked.length} / ${profile.achievements.length}</small></h2><ul class="achievement-list">${profile.achievements.map(a => `<li class="${a.unlockedAt ? 'unlocked' : 'locked'}"><span class="badge">${a.unlockedAt ? '🏅' : '🔒'}</span><div><strong>${escapeHtml(a.name)}</strong><small>${escapeHtml(a.description)}${a.frame ? ` · 獨得相框「${escapeHtml(frameById.get(a.frame)?.name || a.frame)}」` : ''}</small>${a.unlockedAt ? `<small class="when">${escapeHtml(matchDate(a.unlockedAt))} 解鎖</small>` : ''}</div></li>`).join('')}</ul></article>
+      <article class="panel leaderboard profile-rank"><p class="eyebrow">CAT HALL OF FAME</p><h2>單人排行榜</h2>${leaderboardBody(leaderboard)}<button class="link-button" id="open-rank">完整排行榜</button></article>
       <article class="panel profile-history"><p class="eyebrow">MATCH HISTORY</p><h2>歷史比賽 <small>${profile.stats.matches} 場 · ${profile.stats.wins} 次第一</small></h2>${history.length ? `<table class="history-table"><thead><tr><th>日期</th><th>房名</th><th>尺寸</th><th>結果</th></tr></thead><tbody>${history.map(record => `<tr><td>${escapeHtml(matchDate(record.finishedAt))}</td><td>${escapeHtml(record.roomName)}</td><td>${record.size} × ${record.size}</td><td class="${escapeHtml(record.outcome?.status || '')}">${record.outcome ? escapeHtml(outcomeLabel(record.outcome)) : '未完成'}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">還沒有對戰紀錄。</p>'}</article>
     </section></div></div>`;
   document.querySelector('#back').onclick = home;
+  document.querySelector('#open-rank').onclick = showRank;
   document.querySelector('#copy-profile-link').onclick = async () => {
     const link = `${location.origin}/profile/${profile.user.username}`;
     try { await navigator.clipboard.writeText(link); document.querySelector('#profile-message').textContent = '已複製連結'; }

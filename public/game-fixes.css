@@ -145,6 +145,11 @@
 .theme-colors legend { padding: 0 5px; color: var(--text-muted); font-size: 12px; }
 .theme-colors label { display: grid; gap: 4px; margin: 0; font-size: 12px; }
 .theme-colors input[type="color"], #theme-dialog input[type="color"] { width: 100%; height: 34px; padding: 2px; }
+/* The ranking list also appears as a panel on /rank and on a profile page. */
+.leaderboard .link-button { align-self: flex-start; padding: 8px 0 0; }
+.rank-page { margin-top: 18px; }
+.profile-rank ol { max-height: 320px; }
+.history-table td .quiet-button { padding: 5px 10px; font-size: 12px; }
 
 @media (max-width: 899px) {
   .board { gap: 3px; padding: 3px; border-radius: 12px; }
