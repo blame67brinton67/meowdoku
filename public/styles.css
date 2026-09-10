@@ -331,6 +331,12 @@ dialog::backdrop { background: var(--overlay); backdrop-filter: blur(3px); anima
   .people { max-height: none; flex: 0 1 auto; }
   .hero h1, .page-heading h1 { font-size: clamp(26px, 4vh, 40px); }
 }
+/* Phone width: there is no room for a second column, so the home page stacks
+   again and the ranking lives on its own page instead. */
+@media (max-width: 599px) {
+  .lower-grid { grid-template-columns: minmax(0, 1fr); }
+  .lower-grid .leaderboard { display: none; }
+}
 @media (max-width: 400px) {
   .topbar { gap: 8px; }
   .level-catalog { grid-template-columns: 1fr; }
