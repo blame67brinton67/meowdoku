@@ -306,8 +306,10 @@ dialog::backdrop { background: var(--overlay); backdrop-filter: blur(3px); anima
   .hero-cat { display: none; }
   .mode-card p:not(.eyebrow) { display: none; }
   .mode-card .link-button { font-size: 12px; padding: 4px 0 0; }
-  .lower-grid { grid-template-columns: 1fr; gap: 10px; }
-  .lower-grid .leaderboard { display: none; }
+  .lower-grid { grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 10px; }
+  .continue-panel { align-self: start; }
+  .leaderboard { padding: 10px 12px; }
+  .leaderboard li { padding: 4px 0; }
   .level-catalog { grid-template-columns: 1fr 1fr; }
   .lobby-grid { grid-template-columns: 1fr; }
   .rule-card { display: none; }

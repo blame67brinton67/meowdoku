@@ -150,11 +150,28 @@
   .board { gap: 3px; padding: 3px; border-radius: 12px; }
   .cell { border-radius: 5px; }
   .finish-notice { right: 12px; bottom: 12px; }
-  .public-room-list { grid-template-columns: 1fr; }
-  .continue-panel { grid-template-columns: 1fr auto; align-items: center; }
+  .public-room-list { grid-template-columns: 1fr; gap: 8px; margin-top: 8px; }
+  .public-rooms { padding-top: 0; }
+  .public-room { padding: 10px 12px; gap: 8px; }
+  /* Heading and the continue button share the first row, the level card and
+     the catalogue link sit under them. */
+  .continue-panel { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 10px 12px; }
   .continue-panel > div:first-child p { display: none; }
-  .continue-panel .primary { grid-column: 1; }
-  .continue-panel .link-button { grid-column: 2; grid-row: 2; }
+  .continue-panel > div:first-child { grid-column: 1; grid-row: 1; }
+  .continue-panel .primary { grid-column: 2; grid-row: 1; justify-self: end; }
+  .continue-level { grid-column: 1 / -1; grid-row: 2; min-width: 0; padding: 8px 12px; }
+  .continue-panel .link-button { grid-column: 1 / -1; grid-row: 3; justify-self: center; }
+  /* Create on the left, join by key over the public room list on the right. */
+  /* The second row takes the slack, so the room list follows the key card
+     instead of the taller create form pushing it down. */
+  .lobby-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); align-items: start; gap: 10px; }
+  .lobby-body .lobby-grid { display: contents; }
+  .lobby-body #create-room { grid-column: 1; grid-row: 1 / span 2; }
+  .lobby-body #join-room { grid-column: 2; grid-row: 1; }
+  .lobby-body .public-rooms { grid-column: 2; grid-row: 2; }
+  .lobby-body .lobby-card { padding: 12px 14px; }
+  .lobby-body .lobby-card label { margin: 8px 0; }
+  .lobby-body #refresh-rooms { display: none; }
   .board[style*="--n:11"], .board[style*="--n:12"] { gap: 2px; padding: 2px; }
 }
 
